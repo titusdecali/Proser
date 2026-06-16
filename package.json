@@ -1,0 +1,444 @@
+{
+  "name": "proser",
+  "displayName": "Proser — Make VSCode the ultimate writing app",
+  "description": "Thesaurus, markdown spell check, word count, an editable pretty viewer, and an optional AI assistant — VS Code for writers.",
+  "version": "0.0.15",
+  "publisher": "titusdecali",
+  "license": "MIT",
+  "author": {
+    "name": "TitusDecali",
+    "url": "https://github.com/titusdecali"
+  },
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#111418",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/titusdecali/proser.git"
+  },
+  "bugs": {
+    "url": "https://github.com/titusdecali/proser/issues"
+  },
+  "homepage": "https://github.com/titusdecali/proser#readme",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Formatters",
+    "Linters"
+  ],
+  "keywords": [
+    "markdown",
+    "writing",
+    "thesaurus",
+    "spell check",
+    "word count"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "AI network features (Revise with AI, context-aware synonyms) are disabled in untrusted workspaces."
+    }
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "proser.markdownEditor",
+        "displayName": "Proser (Pretty Editable)",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "proser.synonyms",
+        "title": "Synonyms",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.antonyms",
+        "title": "Antonyms",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.useAiSynonyms",
+        "title": "Use AI for Synonyms (Gemma)",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.useLocalSynonyms",
+        "title": "Use Local Dictionary for Synonyms",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.countWordsInSelection",
+        "title": "Count Words in Selection",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.addToDictionary",
+        "title": "Add Word to Dictionary",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.openPretty",
+        "title": "Open Pretty Editable View",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.openPrettyToSide",
+        "title": "Open Pretty View",
+        "category": "Proser",
+        "icon": "$(book)"
+      },
+      {
+        "command": "proser.setWordGoal",
+        "title": "Set Word Goal for This Document",
+        "category": "Proser",
+        "icon": "$(target)"
+      },
+      {
+        "command": "proser.showWordStats",
+        "title": "Document Stats",
+        "category": "Proser",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "proser.toggleFocusMode",
+        "title": "Toggle Focus Mode",
+        "category": "Proser",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "proser.toggleTypewriterMode",
+        "title": "Toggle Typewriter Mode",
+        "category": "Proser",
+        "icon": "$(arrow-both)"
+      },
+      {
+        "command": "proser.reviseWithAI",
+        "title": "Revise with AI",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.ai.setApiKey",
+        "title": "Set OpenRouter API Key",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.ai.clearKey",
+        "title": "Clear OpenRouter API Key",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.ai.selectModel",
+        "title": "Select AI Model (OpenRouter)",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.ai.setupLocal",
+        "title": "Set Up Local AI (Ollama)",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.ai.selectLocalModel",
+        "title": "Select Local AI Model (Ollama)",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.manuscript.titlePage",
+        "title": "Manuscript: Title & Author…",
+        "category": "Proser",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "proser.manuscript.newChapter",
+        "title": "Manuscript: Insert New Chapter",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.manuscript.sceneBreak",
+        "title": "Manuscript: Insert Scene Break",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.manuscript.partDivider",
+        "title": "Manuscript: Insert Part Divider",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.manuscript.theEnd",
+        "title": "Manuscript: Insert THE END",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.manuscript.exportDocx",
+        "title": "Manuscript: Export DOCX (Standard Manuscript Format)",
+        "category": "Proser",
+        "icon": "$(file)"
+      },
+      {
+        "command": "proser.manuscript.exportPdf",
+        "title": "Manuscript: Export PDF (Standard Manuscript Format)",
+        "category": "Proser",
+        "icon": "$(file-pdf)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "proser",
+          "title": "Proser",
+          "icon": "media/manuscript.svg"
+        }
+      ]
+    },
+    "views": {
+      "proser": [
+        {
+          "type": "webview",
+          "id": "proser.manuscriptView",
+          "name": "Manuscript",
+          "icon": "media/manuscript.svg"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "proser.synonyms",
+          "when": "editorTextFocus && resourceLangId == markdown",
+          "group": "proser@1"
+        },
+        {
+          "command": "proser.antonyms",
+          "when": "editorTextFocus && resourceLangId == markdown",
+          "group": "proser@2"
+        },
+        {
+          "command": "proser.reviseWithAI",
+          "when": "editorTextFocus && editorHasSelection && resourceLangId == markdown",
+          "group": "proser@3"
+        },
+        {
+          "command": "proser.useAiSynonyms",
+          "when": "editorTextFocus && resourceLangId == markdown && proser.thesaurus.aiMode != 'ai'",
+          "group": "proser@4"
+        },
+        {
+          "command": "proser.useLocalSynonyms",
+          "when": "editorTextFocus && resourceLangId == markdown && proser.thesaurus.aiMode == 'ai'",
+          "group": "proser@4"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "proser.countWordsInSelection",
+          "when": "resourceExtname == .md && !explorerResourceIsFolder",
+          "group": "proser@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "proser.openPrettyToSide",
+          "when": "resourceLangId == markdown && activeCustomEditorId != 'proser.markdownEditor'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "proser.toggleFocusMode",
+          "when": "editorLangId == markdown",
+          "group": "navigation@2"
+        },
+        {
+          "command": "proser.toggleTypewriterMode",
+          "when": "editorLangId == markdown",
+          "group": "navigation@3"
+        },
+        {
+          "command": "proser.showWordStats",
+          "when": "editorLangId == markdown",
+          "group": "navigation@4"
+        },
+        {
+          "command": "proser.setWordGoal",
+          "when": "editorLangId == markdown",
+          "group": "navigation@5"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Proser",
+      "properties": {
+        "proser.thesaurus.source": {
+          "type": "string",
+          "enum": [
+            "online",
+            "offline",
+            "auto"
+          ],
+          "default": "auto",
+          "description": "Where to fetch synonyms/antonyms: online (Datamuse), offline (bundled WordNet), or auto (Datamuse with offline fallback)."
+        },
+        "proser.thesaurus.maxResults": {
+          "type": "number",
+          "default": 20,
+          "description": "Maximum number of synonym/antonym suggestions to show."
+        },
+        "proser.thesaurus.aiMode": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "ai",
+            "local"
+          ],
+          "enumDescriptions": [
+            "Ask the first time you look up a word.",
+            "Use the AI model (context-aware) first, falling back to the dictionary.",
+            "Use the local dictionary (Datamuse/WordNet) only."
+          ],
+          "default": "ask",
+          "description": "Source for synonyms/antonyms. Switch anytime from the editor right-click menu."
+        },
+        "proser.spellcheck.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable spell checking in Markdown files."
+        },
+        "proser.spellcheck.debounceMs": {
+          "type": "number",
+          "default": 1000,
+          "description": "Delay before re-checking spelling after edits, in milliseconds."
+        },
+        "proser.qualityLint.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Flag weasel words, passive voice, and filler words in Markdown files."
+        },
+        "proser.wordcount.statusBarEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the word count, reading time, and goal progress in the status bar for Markdown files."
+        },
+        "proser.wordcount.includeCodeBlocks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Count words inside fenced and inline code."
+        },
+        "proser.wordcount.includeFrontmatter": {
+          "type": "boolean",
+          "default": false,
+          "description": "Count words inside YAML frontmatter."
+        },
+        "proser.wordcount.wordsPerMinute": {
+          "type": "number",
+          "default": 200,
+          "description": "Reading speed used to estimate reading time."
+        },
+        "proser.wysiwyg.syncDebounceMs": {
+          "type": "number",
+          "default": 200,
+          "description": "Delay before syncing external file changes into the pretty editor, in milliseconds."
+        },
+        "proser.wysiwyg.fontSize": {
+          "type": "number",
+          "default": 16,
+          "minimum": 12,
+          "maximum": 28,
+          "description": "Font size (px) for the Proser pretty editable view."
+        },
+        "proser.wysiwyg.maxWidth": {
+          "type": "string",
+          "default": "65ch",
+          "markdownDescription": "Maximum width of the text column in the pretty view, centered in the pane. Prefer `ch` units (characters per line) so the measure stays comfortable as you resize the font — `65ch` is the typographic sweet spot (~45–75 is ideal for reading prose). You may also use a pixel value like `720px`, or `none` for full width."
+        },
+        "proser.manuscript.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra file basenames to skip when compiling a folder into a manuscript (matched case-insensitively against the filename without `.md`). Common reference files (readme, notes, bible, threads, arcs, review, changelog, todo, memory) are always skipped."
+        },
+        "proser.ai.engine": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "enum": [
+            "off",
+            "openrouter",
+            "ollama"
+          ],
+          "default": "off",
+          "description": "AI backend for 'Revise with AI' and context-aware synonyms: off, OpenRouter (cloud), or Ollama (local)."
+        },
+        "proser.ai.openrouter.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "meta-llama/llama-4-scout",
+          "description": "OpenRouter model slug used for AI features."
+        },
+        "proser.ai.openrouter.preferGroq": {
+          "type": "boolean",
+          "scope": "machine-overridable",
+          "default": true,
+          "description": "Prefer the Groq provider on OpenRouter (with fallback) for faster inference."
+        },
+        "proser.ai.ollama.model": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "gemma4:e4b",
+          "description": "Ollama model tag used for local AI features."
+        },
+        "proser.ai.ollama.endpoint": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "default": "http://localhost:11434",
+          "description": "Base URL of the local Ollama server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit",
+    "pretest": "tsc -p tsconfig.test.json",
+    "test": "vscode-test",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "dictionary-en": "^4.0.0",
+    "docx": "^9.7.1",
+    "nspell": "^2.1.5",
+    "pdfkit": "^0.19.1"
+  },
+  "optionalDependencies": {
+    "wordpos": "^2.1.0"
+  },
+  "devDependencies": {
+    "@toast-ui/editor": "^3.2.2",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.11.0",
+    "@types/nspell": "^2.1.6",
+    "@types/pdfkit": "^0.17.6",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.21.5",
+    "html2pdf.js": "^0.14.0",
+    "typescript": "^5.4.5"
+  }
+}
