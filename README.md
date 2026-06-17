@@ -43,10 +43,18 @@ Open it from the editor title bar (the book icon), or *Reopen Editor With… →
   Portuguese, Dutch, and Russian** download once and then work offline. Switch with
   *Proser: Select Spell Check Language*.
 
+<div align="center">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmh3a16eat8Hsoe9Y7j6GUnVQf2AlW5Ex4bCPFO" alt="Spell check sidebar and inline squiggles" width="60%">
+</div>
+
 ## 📖 Thesaurus
 
 Right-click a word for **synonyms or antonyms** — online (Datamuse) with an offline
 WordNet fallback, or **context-aware** suggestions when AI is enabled.
+
+<div align="center">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhVeaiZkWcNxPzGuWkTtCMpXayUmRFr740ZsoV" alt="Synonyms in the Pretty view" width="60%">
+</div>
 
 ## 🔍 Editor checks (Proser sidebar → Editor tab)
 
@@ -68,6 +76,10 @@ has **Go / Fix / Ignore**, and *Go* jumps right to the passage in the Pretty vie
   double-spaced, 1″ margins) — for **this file** or the **whole folder**. Also on the
   Pretty toolbar's **Export** menu, alongside a quick PDF of the current view.
 
+<div align="center">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhn9n9lTkLAUSNGzthslMRIE7vQT8cFXwdPB9C" alt="Manuscript export menu" width="60%">
+</div>
+
 ## 🤖 Optional AI assistant
 
 - **Revise with AI** on any selection, with reusable saved prompts.
@@ -75,6 +87,10 @@ has **Go / Fix / Ignore**, and *Go* jumps right to the passage in the Pretty vie
 - Choose your engine: **OpenRouter** (cloud) or **Ollama** (fully **local & private**).
   Pick, switch, or delete local models from the status-bar **Model** indicator. Your
   API key lives in the OS keychain — never in settings.
+
+<div align="center">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhZU4y5ZgGVnvdScZkyQ3Nm2P7jUBsLfbACh1R" alt="Revise with AI" width="60%">
+</div>
 
 ## 📊 Word count & goals
 
@@ -96,16 +112,6 @@ Document **outline**, **focus mode** and **typewriter mode**, and writing-qualit
   the local path needs **[Ollama](https://ollama.com)** installed. Everything else —
   spell check, thesaurus (offline), word count, the Pretty editor, and export — works
   with no account and no network.
-
-## Development
-
-```bash
-npm install
-npm run watch      # build + rebuild on change
-# press F5 to launch the Extension Development Host
-npm test           # run the test suite
-npm run package    # produce a .vsix
-```
 
 ## License
 
