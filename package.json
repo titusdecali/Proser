@@ -2,7 +2,7 @@
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
   "description": "Creative writing with local AI editor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "titusdecali",
   "license": "MIT",
   "author": {
@@ -327,7 +327,16 @@
         },
         "proser.spellcheck.language": {
           "type": "string",
-          "enum": ["en", "es", "fr", "de", "it", "pt", "nl", "ru"],
+          "enum": [
+            "en",
+            "es",
+            "fr",
+            "de",
+            "it",
+            "pt",
+            "nl",
+            "ru"
+          ],
           "enumDescriptions": [
             "English (built in)",
             "Spanish — Español (downloads on first use)",
@@ -440,6 +449,7 @@
     "package": "vsce package"
   },
   "dependencies": {
+    "az": "^0.2.3",
     "dictionary-en": "^4.0.0",
     "dictionary-en-gb": "^3.0.0",
     "docx": "^9.7.1",
