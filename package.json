@@ -1,7 +1,7 @@
 {
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
-  "description": "VS Code for writers — a live WYSIWYG editor, multi-language spell check, thesaurus, AI-assisted prose checks (tense, passive voice & continuity), and publisher-ready DOCX/PDF manuscript export.",
+  "description": "Creative writing with local AI editor",
   "version": "1.0.0",
   "publisher": "titusdecali",
   "license": "MIT",
