@@ -59,7 +59,32 @@ function changeMode(m: 'markdown' | 'wysiwyg'): void {
   }
 }
 
+/** The element that actually scrolls in the current mode — used to keep the
+ *  reading position across a Pretty↔Markdown switch (Toast otherwise jumps to
+ *  the bottom of the page). */
+function scrollableEditorEl(): HTMLElement | null {
+  let el: HTMLElement | null = editorContentEl();
+  while (el && el !== document.body) {
+    const oy = getComputedStyle(el).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 2) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+  return null;
+}
+
 function setMode(mode: 'pretty' | 'markdown'): void {
+  if (mode === currentMode) {
+    return;
+  }
+  // Remember where we are so the switch doesn't jump to the bottom of the page.
+  const before = scrollableEditorEl();
+  const ratio =
+    before && before.scrollHeight > before.clientHeight
+      ? before.scrollTop / (before.scrollHeight - before.clientHeight)
+      : 0;
+
   currentMode = mode;
   userTyping = false; // a mode switch is never a user edit
   document.querySelectorAll('#modeToggle button').forEach((b) => {
@@ -75,8 +100,14 @@ function setMode(mode: 'pretty' | 'markdown'): void {
       changeMode('wysiwyg'); // Pretty = editable rendered view
     }
   });
-  // The editable DOM is rebuilt on a mode switch — re-assert spellcheck + repaint.
-  setTimeout(() => applySpellcheck(spellcheckOn), 0);
+  // The editable DOM is rebuilt — re-assert spellcheck and restore the position.
+  setTimeout(() => {
+    applySpellcheck(spellcheckOn);
+    const after = scrollableEditorEl();
+    if (after && after.scrollHeight > after.clientHeight) {
+      after.scrollTop = ratio * (after.scrollHeight - after.clientHeight);
+    }
+  }, 0);
 }
 
 function applyFontSize(px: number): void {
@@ -545,6 +576,10 @@ function reviseShell(titleText: string): { card: HTMLElement; actions: HTMLEleme
   head.appendChild(el('span', 'prv-title', titleText));
   const actions = el('div', 'prv-actions');
   head.appendChild(actions);
+  const close = el('button', 'prv-close', '✕');
+  close.title = 'Close';
+  close.addEventListener('click', () => hideRevise());
+  head.appendChild(close);
   card.appendChild(head);
   // Clicks inside the card (incl. buttons that rebuild it into another stage)
   // must not reach the document "click outside" closer.
@@ -718,9 +753,8 @@ document.addEventListener('click', (e) => {
   if (suggestCard && !suggestCard.contains(t)) {
     hideSuggestions();
   }
-  if (reviseCard && !reviseCard.contains(t)) {
-    hideRevise();
-  }
+  // The Revise card stays open on outside clicks (it's a multi-step flow with a
+  // text input) — close it explicitly with the ✕, "Reject all", or Escape.
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {

@@ -18,7 +18,7 @@ export function getSpellingHtml(webview: vscode.Webview, extensionUri: vscode.Ur
   <meta http-equiv="Content-Security-Policy" content="${csp}" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style nonce="${nonce}">
-    body { margin: 0; padding: 8px; font: var(--vscode-font-family); color: var(--vscode-foreground); font-size: 13px; }
+    body { margin: 0; padding: 8px; font-family: var(--vscode-font-family); color: var(--vscode-foreground); font-size: 13px; }
     #langbar { display: flex; align-items: center; justify-content: space-between; gap: 8px;
       margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border); opacity: 0.9; }
     #langbar .langchange { border: none; background: transparent; color: var(--vscode-textLink-foreground);
@@ -45,12 +45,14 @@ export function getSpellingHtml(webview: vscode.Webview, extensionUri: vscode.Ur
     }
     .item .sugg:hover { background: var(--vscode-toolbar-hoverBackground); }
     .item .none { font-size: 12px; opacity: 0.55; }
-    .item .actions { display: flex; gap: 6px; }
-    .item .add {
+    .item .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .item .go, .item .add, .item .ignore {
       border: 1px solid var(--vscode-panel-border); background: transparent; color: var(--vscode-foreground);
       cursor: pointer; font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 4px;
     }
-    .item .add:hover { background: var(--vscode-toolbar-hoverBackground); }
+    .item .ignore { color: var(--vscode-descriptionForeground); }
+    .item .go { margin-left: auto; } /* push to the far right of the row */
+    .item .go:hover, .item .add:hover, .item .ignore:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
   </style>
   <title>Spelling</title>
 </head>

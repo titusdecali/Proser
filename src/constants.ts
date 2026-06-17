@@ -77,5 +77,9 @@ export const SECRET_OPENROUTER_API_KEY = 'proser.openrouter.apiKey';
 /** globalState key holding the user's added dictionary words. */
 export const STATE_USER_DICTIONARY = 'proser.userDictionary';
 
+/** workspaceState key for spellings the user has chosen to ignore (suppressed,
+ *  but NOT added to the dictionary). */
+export const STATE_SPELL_IGNORED = 'proser.spell.ignored';
+
 /** The `markdown` language id, used to scope every feature to Markdown. */
 export const MARKDOWN_LANGUAGE_ID = 'markdown';

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ConfigKeys, EXTENSION_ID } from '../../constants';
+import { ConfigKeys, EXTENSION_ID, STATE_SPELL_IGNORED } from '../../constants';
 import { getProseTokens } from '../../util/wordcount';
 import { ScanOptions } from '../../util/markdownScan';
 import { UserDictionary } from './userDictionary';
@@ -22,6 +22,7 @@ export interface Misspelling {
  */
 export class SpellService {
   private readonly userDict: UserDictionary;
+  private readonly ignored: Set<string>;
   private engine?: SpellEngine;
   private language: string;
   private loading?: Promise<SpellEngine | undefined>;
@@ -33,6 +34,9 @@ export class SpellService {
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.userDict = new UserDictionary(context);
+    this.ignored = new Set(
+      context.workspaceState.get<string[]>(STATE_SPELL_IGNORED, []).map((w) => w.toLowerCase())
+    );
     this.language = this.configuredLanguage();
     context.subscriptions.push(
       this.changeEmitter,
@@ -116,7 +120,7 @@ export class SpellService {
     const seen = new Set<string>();
     const out: Misspelling[] = [];
     for (const token of getProseTokens(text, opts)) {
-      if (seen.has(token.word) || eng.isCorrect(token.word)) {
+      if (seen.has(token.word) || eng.isCorrect(token.word) || this.ignored.has(token.word.toLowerCase())) {
         continue;
       }
       if (english && isProperNoun(token.word, text, token.start)) {
@@ -139,6 +143,18 @@ export class SpellService {
     await this.userDict.add(word);
     const eng = await this.ensureEngine();
     eng?.add(word);
+    this.changeEmitter.fire();
+  }
+
+  /** Suppresses a misspelling from the list and inline squiggles WITHOUT adding it
+   *  to the dictionary (persisted per workspace). */
+  async ignore(word: string): Promise<void> {
+    const key = (word || '').toLowerCase();
+    if (!key || this.ignored.has(key)) {
+      return;
+    }
+    this.ignored.add(key);
+    await this.context.workspaceState.update(STATE_SPELL_IGNORED, [...this.ignored]);
     this.changeEmitter.fire();
   }
 }

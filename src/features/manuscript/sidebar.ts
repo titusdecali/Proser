@@ -12,6 +12,7 @@ import {
   VIEW_TYPE_MARKDOWN_EDITOR
 } from '../../constants';
 import { getNonce } from '../../util/nonce';
+import { PROSER_THEME_VARS } from '../../util/webviewTheme';
 import { SecretStore } from '../ai/secretStore';
 import { activeMarkdownDoc } from './compile';
 import {
@@ -306,19 +307,28 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
 <style>
+  :root { ${PROSER_THEME_VARS} }
   body { margin: 0; padding: 0; font: var(--vscode-font-size) var(--vscode-font-family); color: var(--vscode-foreground); }
-  #tabs { display: flex; border-bottom: 1px solid var(--vscode-panel-border); }
-  .tab { flex: 1; padding: 9px 4px; background: transparent; border: none; border-bottom: 2px solid transparent;
-    color: var(--vscode-descriptionForeground); cursor: pointer; font: inherit; font-size: 12px; }
-  .tab:hover { color: var(--vscode-foreground); }
-  .tab.active { color: var(--vscode-foreground); font-weight: 600; border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background)); }
-  .panel { padding: 10px; }
 
-  /* Label + control in two aligned columns, so both selects fill the same width. */
-  .ctlgrid { display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: center; margin-bottom: 10px; }
-  .ctlgrid > label { font-size: 12px; opacity: 0.9; }
+  /* Tabs */
+  #tabs { display: flex; gap: 2px; padding: 0 6px; border-bottom: 1px solid var(--vscode-panel-border); }
+  .tab { flex: 1; padding: 10px 6px 8px; background: transparent; border: none; border-bottom: 2px solid transparent;
+    color: var(--vscode-descriptionForeground); cursor: pointer; font: inherit; font-size: 12px;
+    transition: color 0.12s ease, border-color 0.12s ease; }
+  .tab:hover { color: var(--vscode-foreground); }
+  .tab.active { color: var(--vscode-foreground); font-weight: 600;
+    border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background)); }
+  .panel { padding: 12px; }
+
+  /* Section header */
+  .sec { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;
+    color: var(--vscode-descriptionForeground); margin: 16px 1px 8px; }
+  .sec:first-child { margin-top: 2px; }
+
+  /* Scope/Tense — two aligned columns, equal-width selects with a custom caret. */
+  .ctlgrid { display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: center; }
+  .ctlgrid > label { font-size: 12px; color: var(--vscode-descriptionForeground); }
   .select-wrap { position: relative; }
-  /* Custom caret (native arrow removed below) — centered on the right. */
   .select-wrap::after { content: ''; position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
     width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
     border-top: 5px solid currentColor; opacity: 0.55; pointer-events: none; }
@@ -328,46 +338,70 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
     padding: 0 24px 0 9px; cursor: pointer; transition: border-color 0.12s ease; }
   select:hover { border-color: var(--vscode-focusBorder, var(--vscode-input-border)); }
   select:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-  .cont { display: flex; align-items: center; gap: 6px; font-size: 12px; opacity: 0.9; margin-bottom: 10px; }
-  .checks { display: flex; flex-direction: column; gap: 6px; }
-  /* Consistent secondary action buttons (shared with the Insert/Settings .pm-btn). */
-  .checks button { display: flex; align-items: center; width: 100%; min-height: 32px; box-sizing: border-box;
-    padding: 0 11px; cursor: pointer; font: inherit; font-size: 13px; text-align: left; border-radius: 6px;
-    color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.12));
-    border: 1px solid var(--vscode-panel-border); transition: background 0.12s ease; }
-  .checks button:hover { background: var(--vscode-toolbar-hoverBackground); }
-  .checks button:disabled { opacity: 0.5; cursor: default; }
 
-  #eStatus { opacity: 0.75; margin: 10px 0; min-height: 16px; font-size: 12px; }
-  #eList { display: flex; flex-direction: column; gap: 8px; }
-  .issue { border: 1px solid var(--vscode-panel-border); border-left-width: 3px; border-radius: 6px; padding: 7px 9px;
-    background: var(--vscode-editorWidget-background, transparent); }
-  .issue.passive { border-left-color: var(--vscode-charts-yellow, #dcdcaa); }
-  .issue.tense { border-left-color: var(--vscode-charts-purple, #c586c0); }
-  .issue.continuity { border-left-color: var(--vscode-charts-red, #f14c4c); }
+  /* Continuous-scan toggle — custom accent checkbox. */
+  .cont { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.45;
+    color: var(--vscode-descriptionForeground); cursor: pointer; margin: 12px 1px 2px; }
+  .cont input { appearance: none; -webkit-appearance: none; flex: 0 0 auto; width: 16px; height: 16px; margin: 0;
+    border: 1px solid var(--vscode-checkbox-border, var(--vscode-input-border, var(--vscode-panel-border)));
+    border-radius: 4px; background: var(--vscode-checkbox-background, var(--vscode-input-background));
+    display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease; }
+  .cont input:checked { background: var(--vscode-button-background); border-color: var(--vscode-button-background); }
+  .cont input:checked::after { content: ''; width: 4px; height: 8px; margin-top: -1px;
+    border: solid var(--vscode-button-foreground); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+
+  /* Check buttons — color-coded to match their result type. */
+  .checks { display: flex; flex-direction: column; gap: 7px; }
+  .check { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 36px; box-sizing: border-box;
+    padding: 0 11px; cursor: pointer; font: inherit; font-size: 13px; text-align: left; border-radius: 7px;
+    color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.10));
+    border: 1px solid var(--vscode-panel-border); transition: background 0.12s ease, border-color 0.12s ease; }
+  .check:hover { background: var(--vscode-toolbar-hoverBackground); border-color: var(--vscode-focusBorder); }
+  .check:disabled { opacity: 0.5; cursor: default; }
+  .check .dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
+  .check .lbl { flex: 1 1 auto; }
+  .check-tense .dot { background: var(--proser-opt-1); }
+  .check-passive .dot { background: var(--proser-opt-2); }
+  .check-continuity .dot { background: var(--proser-opt-3); }
+
+  /* Status / results */
+  #eStatus { color: var(--vscode-descriptionForeground); margin: 14px 1px 0; min-height: 16px; font-size: 12px; line-height: 1.45; }
+  #eList { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .issue { border: 1px solid var(--vscode-panel-border); border-left-width: 3px; border-radius: 7px; padding: 8px 10px;
+    background: var(--vscode-editorWidget-background, rgba(128,128,128,0.06)); }
+  .issue.tense { border-left-color: var(--proser-opt-1); }
+  .issue.passive { border-left-color: var(--proser-opt-2); }
+  .issue.continuity { border-left-color: var(--proser-opt-3); }
   .ihead { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-  .badge { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 999px;
+  .badge { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 1px 7px; border-radius: 999px;
     background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
   .loc { font-size: 11px; opacity: 0.6; }
-  .sentence { line-height: 1.4; margin: 2px 0; }
+  .sentence { line-height: 1.45; margin: 2px 0; }
   .reason { font-size: 11px; opacity: 0.7; margin: 2px 0; }
-  .sugg { font-size: 12px; opacity: 0.85; margin: 2px 0 6px; }
+  .sugg { font-size: 12px; opacity: 0.85; margin: 2px 0 7px; }
   .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .actions button { border: 1px solid var(--vscode-panel-border); background: var(--vscode-button-secondaryBackground, transparent);
-    color: var(--vscode-foreground); cursor: pointer; font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 4px; }
+    color: var(--vscode-foreground); cursor: pointer; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 5px;
+    transition: background 0.12s ease; }
   .actions button:hover { background: var(--vscode-toolbar-hoverBackground); }
   .actions .fix { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border-color: transparent; }
+  .actions .fix:hover { background: var(--vscode-button-hoverBackground); }
   .actions button:disabled { opacity: 0.5; cursor: default; }
 
-  .pm-btn { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; box-sizing: border-box;
-    text-align: left; margin: 6px 0; padding: 0 11px; cursor: pointer; font: inherit; font-size: 13px;
-    color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.12));
-    border: 1px solid var(--vscode-panel-border); border-radius: 6px; transition: background 0.12s ease; }
-  .pm-btn:hover { background: var(--vscode-toolbar-hoverBackground); }
-  .pm-ico { font-size: 14px; width: 16px; text-align: center; opacity: 0.9; }
+  /* Insert / Settings buttons — icon in a subtle badge. */
+  .pm-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; box-sizing: border-box;
+    text-align: left; margin: 0 0 7px; padding: 0 10px; cursor: pointer; font: inherit; font-size: 13px;
+    color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.10));
+    border: 1px solid var(--vscode-panel-border); border-radius: 7px; transition: background 0.12s ease, border-color 0.12s ease; }
+  .pm-btn:hover { background: var(--vscode-toolbar-hoverBackground); border-color: var(--vscode-focusBorder); }
+  .pm-ico { flex: 0 0 auto; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; line-height: 1; border-radius: 5px;
+    background: var(--vscode-badge-background, rgba(128,128,128,0.2)); color: var(--vscode-badge-foreground, var(--vscode-foreground)); }
   .pm-export { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
-  .pm-export:hover { background: var(--vscode-button-hoverBackground); }
-  .pm-note { font-size: 11px; opacity: 0.6; margin: 10px 2px 2px; line-height: 1.4; }
+  .pm-export:hover { background: var(--vscode-button-hoverBackground); border-color: transparent; }
+  .pm-export .pm-ico { background: rgba(255,255,255,0.18); color: var(--vscode-button-foreground); }
+  .pm-note { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 12px 1px 2px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -395,11 +429,12 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
         </select>
       </span>
     </div>
-    <label class="cont"><input type="checkbox" id="continuous" /> Scan continuously (re-check tense &amp; passive voice as you write)</label>
+    <label class="cont"><input type="checkbox" id="continuous" /><span>Scan continuously — re-check tense &amp; passive voice as you write</span></label>
+    <div class="sec">Checks</div>
     <div class="checks">
-      <button data-check="tense">Check correct tense usage</button>
-      <button data-check="passive">Check passive voice</button>
-      <button data-check="continuity">Check continuity</button>
+      <button class="check check-tense" data-check="tense"><span class="dot"></span><span class="lbl">Check tense usage</span></button>
+      <button class="check check-passive" data-check="passive"><span class="dot"></span><span class="lbl">Check passive voice</span></button>
+      <button class="check check-continuity" data-check="continuity"><span class="dot"></span><span class="lbl">Check continuity</span></button>
     </div>
     <div id="eStatus"></div>
     <div id="eList"></div>
@@ -409,13 +444,16 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
     ${cmdBtn(Commands.manuscriptNewChapter, 'New Chapter', '¶')}
     ${cmdBtn(Commands.manuscriptDivider, 'Add Divider', '―')}
     ${cmdBtn(Commands.manuscriptSceneBreak, 'Add Scene Break', '✳')}
+    <div class="pm-note">New Chapter creates a file right after the current one. Dividers and scene breaks insert at your cursor.</div>
   </div>
 
   <div class="panel" data-tab="settings" style="display:none">
+    <div class="sec">Manuscript</div>
     ${cmdBtn(Commands.manuscriptTitlePage, 'Title &amp; Author…', '✎')}
+    <div class="sec">Export</div>
     ${cmdBtn(Commands.manuscriptExportDocx, 'Export DOCX', '⤓', 'pm-export')}
     ${cmdBtn(Commands.manuscriptExportPdf, 'Export PDF', '⤓', 'pm-export')}
-    <div class="pm-note">Exports compile into Standard Manuscript Format (Courier 12pt, double-spaced, 1" margins). Choose this file or the whole folder from the Pretty toolbar's Export menu.</div>
+    <div class="pm-note">Standard Manuscript Format (Courier 12pt, double-spaced, 1" margins). Choose this file or the whole folder from the Pretty toolbar's Export menu.</div>
   </div>
 
   <script nonce="${nonce}" src="${scriptUri}"></script>

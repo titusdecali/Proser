@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { Commands, VIEW_TYPE_SPELLING } from '../../constants';
+import { Commands, VIEW_TYPE_MARKDOWN_EDITOR, VIEW_TYPE_SPELLING } from '../../constants';
 import { activeMarkdownDoc } from '../manuscript/compile';
 import { SpellService } from './spellService';
 import { languageLabel } from './dictionaries';
@@ -16,7 +16,8 @@ export function registerSpellingView(context: vscode.ExtensionContext, spell: Sp
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       VIEW_TYPE_SPELLING,
-      new SpellingViewProvider(context, spell)
+      new SpellingViewProvider(context, spell),
+      { webviewOptions: { retainContextWhenHidden: true } } // persist when hidden
     )
   );
 }
@@ -75,6 +76,11 @@ class SpellingViewProvider implements vscode.WebviewViewProvider {
       case 'addToDictionary':
         if (msg.word) {
           void this.spell.add(msg.word); // fires onDidChange → refresh
+        }
+        break;
+      case 'ignore':
+        if (msg.word) {
+          void this.spell.ignore(msg.word); // suppress without adding to dictionary
         }
         break;
       case 'replace':
@@ -144,10 +150,20 @@ class SpellingViewProvider implements vscode.WebviewViewProvider {
     await vscode.workspace.applyEdit(edit); // doc change → refresh via listener
   }
 
-  /** Opens the active doc and selects the first occurrence of `word`. */
+  /** Shows the word in the Pretty view (scrolls to + flashes the first
+   *  occurrence). Falls back to selecting it in a text editor. */
   private async reveal(word: string): Promise<void> {
     const doc = activeMarkdownDoc();
     if (!doc) {
+      return;
+    }
+    await vscode.commands.executeCommand('vscode.openWith', doc.uri, VIEW_TYPE_MARKDOWN_EDITOR);
+    const revealed = await vscode.commands.executeCommand(
+      Commands.revealInPretty,
+      doc.uri.toString(),
+      word
+    );
+    if (revealed) {
       return;
     }
     const m = wordRegex(word).exec(doc.getText());

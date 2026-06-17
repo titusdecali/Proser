@@ -93,7 +93,10 @@ async function exportManuscript(kind: 'docx' | 'pdf', scope: Scope): Promise<voi
 export function registerManuscript(context: vscode.ExtensionContext): void {
   const sidebar = new ManuscriptSidebar(context);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(MANUSCRIPT_VIEW_ID, sidebar),
+    // Keep the webview alive when hidden so toggling it open is instant (no reload).
+    vscode.window.registerWebviewViewProvider(MANUSCRIPT_VIEW_ID, sidebar, {
+      webviewOptions: { retainContextWhenHidden: true }
+    }),
     // Toggles the sidebar on the Editor (checks) tab — used by the Pretty toolbar.
     vscode.commands.registerCommand(Commands.editorChecks, () => sidebar.toggleEditor()),
     vscode.commands.registerCommand(Commands.manuscriptTitlePage, editTitlePage),

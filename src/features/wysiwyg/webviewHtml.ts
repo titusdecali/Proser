@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { getNonce } from '../../util/nonce';
+import { PROSER_THEME_VARS } from '../../util/webviewTheme';
 
 /** Builds the webview HTML with a strict CSP. Scripts run only under the nonce;
  *  styles come from the bundled CSS plus inline (Toast UI injects some). */
@@ -28,6 +29,7 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link href="${styleUri}" rel="stylesheet" />
   <style nonce="${nonce}">
+    :root { ${PROSER_THEME_VARS} }
     html, body { height: 100%; margin: 0; padding: 0; overflow: hidden;
       /* Barely-visible edge: the theme's panel border at ~30% opacity, used for
          the page frame + toolbar/footer separators so they don't read as bright. */
@@ -199,9 +201,9 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       color: inherit; padding: 5px 9px; border-radius: 4px; cursor: pointer; font: inherit;
     }
     #proser-suggest .psg-opt:hover { background: var(--vscode-list-hoverBackground); }
-    #proser-suggest .psg-opt.c0 { border-left-color: var(--vscode-charts-green, #4ec9b0); }
-    #proser-suggest .psg-opt.c1 { border-left-color: var(--vscode-charts-purple, #c586c0); }
-    #proser-suggest .psg-opt.c2 { border-left-color: var(--vscode-charts-yellow, #dcdcaa); }
+    #proser-suggest .psg-opt.c0 { border-left-color: var(--proser-opt-1); }
+    #proser-suggest .psg-opt.c1 { border-left-color: var(--proser-opt-2); }
+    #proser-suggest .psg-opt.c2 { border-left-color: var(--proser-opt-3); }
     #proser-suggest .psg-opt.cx { border-left-color: var(--vscode-panel-border); }
     #proser-suggest .psg-actions {
       display: flex; justify-content: space-between; gap: 8px; margin-top: 8px;
@@ -225,8 +227,11 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       display: flex; align-items: center; justify-content: space-between; gap: 10px;
       padding: 2px 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 8px;
     }
-    #proser-revise .prv-title { font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.04em; }
+    #proser-revise .prv-title { flex: 1 1 auto; font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 0.04em; }
     #proser-revise .prv-actions { display: flex; gap: 8px; }
+    #proser-revise .prv-close { border: none; background: transparent; color: var(--vscode-descriptionForeground);
+      cursor: pointer; font: inherit; font-size: 13px; line-height: 1; padding: 2px 5px; border-radius: 4px; }
+    #proser-revise .prv-close:hover { color: var(--vscode-foreground); background: var(--vscode-toolbar-hoverBackground); }
     #proser-revise .psg-link {
       border: none; background: transparent; color: var(--vscode-textLink-foreground);
       cursor: pointer; font: inherit; padding: 2px 4px;
@@ -236,9 +241,9 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       display: flex; gap: 10px; align-items: flex-start; padding: 7px 8px; margin-bottom: 6px;
       border-left: 3px solid transparent; border-radius: 4px; background: var(--vscode-list-hoverBackground, transparent);
     }
-    #proser-revise .prv-opt.c0 { border-left-color: var(--vscode-charts-green, #4ec9b0); }
-    #proser-revise .prv-opt.c1 { border-left-color: var(--vscode-charts-purple, #c586c0); }
-    #proser-revise .prv-opt.c2 { border-left-color: var(--vscode-charts-yellow, #dcdcaa); }
+    #proser-revise .prv-opt.c0 { border-left-color: var(--proser-opt-1); }
+    #proser-revise .prv-opt.c1 { border-left-color: var(--proser-opt-2); }
+    #proser-revise .prv-opt.c2 { border-left-color: var(--proser-opt-3); }
     #proser-revise .prv-text { flex: 1 1 auto; max-height: 140px; overflow: auto; line-height: 1.4; white-space: pre-wrap; }
     #proser-revise .prv-accept {
       flex: 0 0 auto; align-self: center; border: none; cursor: pointer; font: inherit;
@@ -351,13 +356,13 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
 </head>
 <body>
   <div id="toolbar">
+    <button id="issuesBtn" title="Editor checks — tense / passive voice / continuity — toggle the panel">Editor</button>
+    <button id="spellToggle" class="toggle" title="Toggle spell check (this view + Markdown)">Spelling</button>
+    <div class="spacer"></div>
     <div class="seg" id="modeToggle">
       <button data-mode="pretty" class="active" title="Edit in the rendered view">Pretty</button>
       <button data-mode="markdown" title="Edit the raw Markdown source">Markdown</button>
     </div>
-    <div class="spacer"></div>
-    <button id="spellToggle" class="toggle" title="Toggle spell check (this view + Markdown)">Spelling</button>
-    <button id="issuesBtn" title="Editor checks — tense / passive voice / continuity — toggle the panel">Editor</button>
     <div class="fontctl">
       <button id="fontMinus" title="Decrease font size">−</button>
       <span id="fontSize">18</span>

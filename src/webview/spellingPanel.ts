@@ -67,7 +67,7 @@ function render(state: State): void {
     const wordBtn = document.createElement('button');
     wordBtn.className = 'wordbtn';
     wordBtn.textContent = it.word;
-    wordBtn.title = 'Reveal in editor';
+    wordBtn.title = 'Show this word in the Pretty view';
     wordBtn.addEventListener('click', () => vscode.postMessage({ type: 'reveal', word: it.word }));
     head.appendChild(wordBtn);
     if (it.count > 1) {
@@ -101,11 +101,23 @@ function render(state: State): void {
 
     const actions = document.createElement('div');
     actions.className = 'actions';
+    const go = document.createElement('button');
+    go.className = 'go';
+    go.textContent = 'Go To';
+    go.title = 'Show this word in the Pretty view';
+    go.addEventListener('click', () => vscode.postMessage({ type: 'reveal', word: it.word }));
     const add = document.createElement('button');
     add.className = 'add';
     add.textContent = '＋ Add to dictionary';
     add.addEventListener('click', () => vscode.postMessage({ type: 'addToDictionary', word: it.word }));
+    const ignore = document.createElement('button');
+    ignore.className = 'ignore';
+    ignore.textContent = 'Ignore';
+    ignore.title = 'Stop flagging this word (does not add it to the dictionary)';
+    ignore.addEventListener('click', () => vscode.postMessage({ type: 'ignore', word: it.word }));
     actions.appendChild(add);
+    actions.appendChild(ignore);
+    actions.appendChild(go);
     row.appendChild(actions);
 
     list.appendChild(row);
