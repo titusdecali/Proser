@@ -28,34 +28,50 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link href="${styleUri}" rel="stylesheet" />
   <style nonce="${nonce}">
-    html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+    html, body { height: 100%; margin: 0; padding: 0; overflow: hidden;
+      /* Barely-visible edge: the theme's panel border at ~30% opacity, used for
+         the page frame + toolbar/footer separators so they don't read as bright. */
+      --proser-edge: color-mix(in srgb, var(--vscode-panel-border) 30%, transparent); }
     body { display: flex; flex-direction: column; }
 
     /* Hide Toast UI's own toolbar / mode switch — we provide our own. */
     .toastui-editor-toolbar, .toastui-editor-mode-switch { display: none !important; }
 
     #toolbar {
-      display: flex; align-items: center; gap: 8px;
-      padding: 5px 10px; border-bottom: 1px solid var(--vscode-panel-border);
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 10px; border-bottom: 1px solid var(--proser-edge);
       background: var(--vscode-editor-background); flex: 0 0 auto;
     }
     #toolbar .spacer { flex: 1 1 auto; }
+    /* One shared height for every control so the row reads as a single, even strip. */
+    #toolbar button, #toolbar .seg { height: 28px; box-sizing: border-box; }
     #toolbar button {
-      font: inherit; cursor: pointer; color: var(--vscode-foreground);
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+      color: var(--vscode-foreground);
       background: var(--vscode-button-secondaryBackground, transparent);
-      border: 1px solid var(--vscode-panel-border); padding: 3px 10px; border-radius: 4px;
+      border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 0 11px;
+      transition: background 0.12s ease, border-color 0.12s ease;
     }
     #toolbar button:hover { background: var(--vscode-toolbar-hoverBackground); }
+    #toolbar button svg { pointer-events: none; display: block; }
+    #toolbar .caret { opacity: 0.7; }
+    /* Toggle buttons (e.g. Spelling) show a filled state when active. */
+    #toolbar button.toggle.active {
+      background: var(--vscode-button-background); color: var(--vscode-button-foreground);
+      border-color: var(--vscode-button-background);
+    }
+    #toolbar button.toggle.active:hover { background: var(--vscode-button-hoverBackground); }
 
-    /* Segmented mode toggle — a rounded pill with a filled active segment.
-       Scoped under #toolbar so it out-specifies the generic #toolbar button. */
+    /* Segmented mode toggle — a pill with a filled active segment, same height. */
     #toolbar .seg {
-      display: inline-flex; gap: 3px; padding: 3px; border: none; border-radius: 9px;
-      background: var(--vscode-keybindingLabel-background, rgba(128,128,128,0.16));
+      display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+      border: 1px solid var(--vscode-panel-border); border-radius: 7px;
+      background: var(--vscode-keybindingLabel-background, rgba(128,128,128,0.14));
     }
     #toolbar .seg button {
-      border: none; border-radius: 7px; padding: 5px 18px; background: transparent;
-      color: var(--vscode-descriptionForeground); font: inherit; cursor: pointer;
+      height: 22px; border: none; border-radius: 5px; padding: 0 14px;
+      background: transparent; color: var(--vscode-descriptionForeground);
       transition: background 0.12s ease, color 0.12s ease;
     }
     #toolbar .seg button:not(.active):hover {
@@ -63,18 +79,12 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     }
     #toolbar .seg button.active {
       background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
     }
 
-    #toolbar .fontctl { display: inline-flex; align-items: center; gap: 6px; }
-    /* Scoped under #toolbar so it beats the generic "#toolbar button" (ID) rule
-       that was forcing 10px side padding and shoving the minus/plus glyph
-       off-centre. Flex-centring keeps the glyph dead-centre regardless of metrics. */
-    #toolbar .fontctl button {
-      display: inline-flex; align-items: center; justify-content: center;
-      width: 28px; height: 26px; padding: 0; line-height: 1; font-size: 15px;
-    }
-    #fontSize { min-width: 22px; text-align: center; opacity: 0.85; }
+    /* Font stepper — square −/+ buttons matching the shared height, value between. */
+    #toolbar .fontctl { display: inline-flex; align-items: center; gap: 4px; }
+    #toolbar .fontctl button { width: 28px; padding: 0; font-size: 15px; }
+    #fontSize { min-width: 22px; text-align: center; font-size: 12px; opacity: 0.85; }
 
     #editorWrap { flex: 1 1 auto; position: relative; min-height: 0; }
     #editor { position: absolute; inset: 0; }
@@ -85,9 +95,14 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
 
     #footer {
       flex: 0 0 auto; padding: 3px 12px; font-size: 12px; opacity: 0.8;
-      border-top: 1px solid var(--vscode-panel-border);
+      border-top: 1px solid var(--proser-edge);
       background: var(--vscode-editor-background); color: var(--vscode-descriptionForeground);
     }
+    /* Stats (left) + model selector (right) span the full frame width, sitting at
+       its far edges — not aligned to the text column. */
+    #footer #footerInner { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+    #footer #model { cursor: pointer; white-space: nowrap; }
+    #footer #model:hover { color: var(--vscode-foreground); text-decoration: underline; }
 
     /* Match the VS Code theme instead of Toast UI's light palette. */
     .toastui-editor-defaultUI,
@@ -95,7 +110,7 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     .toastui-editor-md-preview, .toastui-editor-md-tab-container,
     #editor, #preview {
       background-color: var(--vscode-editor-background) !important;
-      border-color: var(--vscode-panel-border) !important;
+      border-color: var(--proser-edge) !important;
     }
     /* Force all text to the theme foreground (Toast sets per-element colors). */
     .toastui-editor-contents, .toastui-editor-contents *,
@@ -146,9 +161,24 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       display: block; width: 100%; text-align: left; border: none; background: transparent;
       color: inherit; padding: 6px 12px; border-radius: 4px; cursor: pointer; font: inherit;
     }
-    #proser-ctx button:hover {
+    #proser-ctx button:hover:not(:disabled) {
       background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
       color: var(--vscode-menu-selectionForeground, inherit);
+    }
+    #proser-ctx button:disabled {
+      opacity: 0.4; cursor: default;
+    }
+    /* Inline-formatting icon row (Bold / Italic / Underline / Strikethrough / Code).
+       More specific than the generic "#proser-ctx button" rule, so the icons stay
+       compact and centered instead of full-width menu items. The inner <b>/<i>/<u>/<s>
+       keep their default styling so each glyph shows what it does. */
+    #proser-ctx .fmt {
+      display: flex; gap: 2px; padding: 0 2px 4px; margin-bottom: 4px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    #proser-ctx .fmt button {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 28px; padding: 0; text-align: center; font-size: 13px;
     }
 
     /* Anchored synonym/antonym card (appears under the word). */
@@ -288,6 +318,28 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       color: var(--vscode-input-foreground); background: var(--vscode-input-background);
       border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
     }
+    /* Find matches are painted with the CSS Custom Highlight API, so the find
+       input never loses focus to a document selection. */
+    ::highlight(proser-find) {
+      background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234,179,8,0.35));
+    }
+    ::highlight(proser-find-current) {
+      background-color: var(--vscode-editor-findMatchBackground, rgba(234,179,8,0.75));
+      color: var(--vscode-editor-foreground);
+    }
+    /* Misspelled words (Proser's dictionary) — a red wavy underline drawn over
+       the text without touching ProseMirror. A faint tint is the fallback for
+       engines that ignore text-decoration on highlight pseudo-elements. */
+    ::highlight(proser-misspell) {
+      text-decoration: underline wavy var(--vscode-editorError-foreground, #f14c4c);
+      text-decoration-skip-ink: none;
+      background-color: rgba(241, 76, 76, 0.12);
+    }
+    /* A passage revealed from the sidebar checker's "Go" — flashed briefly. */
+    ::highlight(proser-reveal) {
+      background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234,179,8,0.45));
+      color: var(--vscode-editor-foreground);
+    }
     #proser-find .fcount { font-size: 11px; opacity: 0.7; min-width: 64px; text-align: right; }
     #proser-find button {
       border: none; background: transparent; color: var(--vscode-foreground);
@@ -304,17 +356,24 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       <button data-mode="markdown" title="Edit the raw Markdown source">Markdown</button>
     </div>
     <div class="spacer"></div>
+    <button id="spellToggle" class="toggle" title="Toggle spell check (this view + Markdown)">Spelling</button>
+    <button id="issuesBtn" title="Editor checks — tense / passive voice / continuity — toggle the panel">Editor</button>
     <div class="fontctl">
       <button id="fontMinus" title="Decrease font size">−</button>
-      <span id="fontSize">16</span>
+      <span id="fontSize">18</span>
       <button id="fontPlus" title="Increase font size">+</button>
     </div>
-    <button id="exportPdf" title="Export to PDF">PDF</button>
+    <button id="exportBtn" title="Export — DOCX/PDF (manuscript format) for this file or the whole folder">Export<svg class="caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4 5 6.5 7.5 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
   <div id="editorWrap">
     <div id="editor"></div>
   </div>
-  <div id="footer"><span id="stats"></span></div>
+  <div id="footer">
+    <div id="footerInner">
+      <span id="stats"></span>
+      <span id="model" title="Switch AI model"></span>
+    </div>
+  </div>
   <div id="proser-find">
     <input id="findInput" type="text" placeholder="Find" spellcheck="false" />
     <span id="findCount" class="fcount"></span>

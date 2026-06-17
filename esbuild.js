@@ -19,7 +19,7 @@ async function main() {
     platform: 'node',
     target: 'node18',
     outfile: 'dist/extension.js',
-    external: ['vscode', 'nspell', 'dictionary-en', 'wordpos', 'docx', 'pdfkit'],
+    external: ['vscode', 'nspell', 'dictionary-en', 'dictionary-en-gb', 'wordpos', 'docx', 'pdfkit'],
     sourcemap: !production,
     minify: production,
     logLevel: 'info'
@@ -27,19 +27,27 @@ async function main() {
 
   const contexts = [extensionCtx];
 
-  if (fs.existsSync('src/webview/main.ts')) {
-    const webviewCtx = await esbuild.context({
-      entryPoints: ['src/webview/main.ts'],
-      bundle: true,
-      format: 'iife',
-      platform: 'browser',
-      target: 'es2020',
-      outfile: 'media/webview.js',
-      sourcemap: !production,
-      minify: production,
-      logLevel: 'info'
-    });
-    contexts.push(webviewCtx);
+  // Browser/IIFE bundles for each webview. Each entry maps to a media/*.js file.
+  const webviewEntries = [
+    { src: 'src/webview/main.ts', out: 'media/webview.js' },
+    { src: 'src/webview/manuscriptPanel.ts', out: 'media/manuscript.js' },
+    { src: 'src/webview/spellingPanel.ts', out: 'media/spelling.js' }
+  ];
+  for (const { src, out } of webviewEntries) {
+    if (fs.existsSync(src)) {
+      const ctx = await esbuild.context({
+        entryPoints: [src],
+        bundle: true,
+        format: 'iife',
+        platform: 'browser',
+        target: 'es2020',
+        outfile: out,
+        sourcemap: !production,
+        minify: production,
+        logLevel: 'info'
+      });
+      contexts.push(ctx);
+    }
   }
 
   if (watch) {

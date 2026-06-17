@@ -16,11 +16,16 @@ export async function aiContextSuggestions(
 ): Promise<string[]> {
   const target = kind === 'synonyms' ? 'synonyms' : 'antonyms';
   const system =
-    'You are a precise thesaurus. Reply ONLY with a comma-separated list of single words. No explanations, no numbering, no quotes.';
+    'You are a precise thesaurus and line editor. You suggest replacements that slot into the exact ' +
+    'sentence — matching the target word’s part of speech, tense/inflection, number, register, and ' +
+    'connotation, so the sentence still reads naturally. Reply ONLY with a comma-separated list, ' +
+    'ordered best-fit first. No explanations, numbering, or quotes.';
   const user =
     `Sentence: "${sentence}"\n` +
-    `Give up to ${max} ${target} for the word "${word}" that fit this exact context. ` +
-    `Lowercase, comma-separated, no duplicates, and do not include "${word}" itself.`;
+    `Suggest up to ${max} ${target} that could replace "${word}" in THIS sentence without changing its ` +
+    `meaning or grammar. Keep the same part of speech and tense/inflection as "${word}" (e.g. a past-tense ` +
+    `verb stays past tense, a plural stays plural). Order them best-fit-for-this-context first. ` +
+    `Lowercase unless a proper noun, comma-separated, no duplicates, and do not include "${word}" itself.`;
 
   const text = await client.chat(
     [

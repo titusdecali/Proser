@@ -79,11 +79,12 @@ export interface CompileResult {
   files: string[];
 }
 
-export async function compileBook(
-  folder: vscode.Uri,
+/** Compiles a specific, ordered list of chapter files into a book. Empty files
+ *  are skipped. Used for both whole-folder and single-file ("active") exports. */
+export async function compileChapters(
+  uris: vscode.Uri[],
   meta: ManuscriptMeta
 ): Promise<CompileResult> {
-  const uris = await gatherChapterFiles(folder);
   const chapters: Chapter[] = [];
   const files: string[] = [];
   for (const uri of uris) {
@@ -99,4 +100,11 @@ export async function compileBook(
   const book: BookModel = { meta, chapters, wordCount: 0 };
   book.wordCount = countWords(chapters);
   return { book, files };
+}
+
+export async function compileBook(
+  folder: vscode.Uri,
+  meta: ManuscriptMeta
+): Promise<CompileResult> {
+  return compileChapters(await gatherChapterFiles(folder), meta);
 }

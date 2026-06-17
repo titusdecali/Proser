@@ -5,9 +5,20 @@ import { fetchFromWordNet } from './offlineThesaurus';
 import { SecretStore } from '../ai/secretStore';
 import { createEngine, prepareEngine } from '../ai/engineFactory';
 import { aiContextSuggestions } from '../ai/aiSynonyms';
+import { currentModelName } from '../ai/aiModelStatus';
 
 type Source = 'online' | 'offline' | 'auto';
 type AiMode = 'ask' | 'ai' | 'local';
+/** Where the suggestions actually came from, for transparent UI. */
+type LookupSource = 'ai' | 'online' | 'offline' | 'none';
+/** Why the AI path did or didn't produce results — drives actionable messaging. */
+type AiStatus = 'ok' | 'off' | 'not-ready' | 'timeout' | 'error' | 'empty' | 'skipped';
+
+/** Diagnostic log (View → Output → "Proser") so lookups are never a black box. */
+let output: vscode.OutputChannel | undefined;
+function log(line: string): void {
+  output?.appendLine(`${new Date().toLocaleTimeString()}  ${line}`);
+}
 
 const AI_MODE_CONTEXT_KEY = 'proser.thesaurus.aiMode';
 
@@ -26,6 +37,8 @@ let pending: PendingSuggestions | undefined;
 
 export function registerThesaurus(context: vscode.ExtensionContext): void {
   const secrets = new SecretStore(context.secrets);
+  output = vscode.window.createOutputChannel('Proser');
+  context.subscriptions.push(output);
 
   // Keep a context key in sync with the mode so the right-click menu can show
   // "Use AI…" vs "Use Local Dictionary…".
@@ -181,9 +194,12 @@ async function runThesaurus(kind: ThesaurusKind, secrets: SecretStore): Promise<
     // Dismissed: use the dictionary this once and ask again next time.
   }
 
-  const { words: unique, usedAi } = await gatherWords(secrets, kind, query, sentence, useAi);
+  const lookup = await gatherWords(secrets, kind, query, sentence, useAi);
+  const unique = lookup.words;
   if (unique.length === 0) {
-    vscode.window.showInformationMessage(`No ${noun} found for “${original}”.`);
+    vscode.window.showInformationMessage(
+      noResultsMessage(noun, original, kind, lookup.triedAi, lookup.aiStatus)
+    );
     return;
   }
 
@@ -197,15 +213,61 @@ async function runThesaurus(kind: ThesaurusKind, secrets: SecretStore): Promise<
   if (!range.contains(caret) && !range.end.isEqual(caret)) {
     return;
   }
+  const label = sourceLabel(lookup.source);
   pending = {
     uri: doc.uri.toString(),
     range,
     word: original,
     items: unique.map((w) => matchCapitalization(original, w)),
-    detail: usedAi ? 'Proser · AI' : 'Proser'
+    detail: `Proser · ${label}`
   };
   editor.selection = new vscode.Selection(range.end, range.end);
+  // A visible, transient confirmation of which source answered (AI vs dictionary).
+  vscode.window.setStatusBarMessage(
+    `$(${lookup.source === 'ai' ? 'sparkle' : 'book'}) Proser: ${unique.length} ${noun} · ${label}`,
+    3500
+  );
   await vscode.commands.executeCommand('editor.action.triggerSuggest');
+}
+
+/** Human label for where suggestions came from. */
+function sourceLabel(source: LookupSource): string {
+  switch (source) {
+    case 'ai':
+      return `AI (${currentModelName()})`;
+    case 'online':
+      return 'Datamuse';
+    case 'offline':
+      return 'offline dictionary';
+    default:
+      return 'dictionary';
+  }
+}
+
+/** A no-results message that says what was tried, why the AI didn't help, and what to do. */
+export function noResultsMessage(
+  noun: string,
+  original: string,
+  kind: ThesaurusKind,
+  triedAi: boolean,
+  aiStatus: AiStatus
+): string {
+  let msg = `No ${noun} found for “${original}”.`;
+  if (triedAi && (aiStatus === 'not-ready' || aiStatus === 'off')) {
+    msg += ' The AI model isn’t running — click the model name (footer / status bar) to start or set it up.';
+  } else if (triedAi && aiStatus === 'timeout') {
+    msg += ' The AI model timed out — gemma4:12b is slow; switch to E4B for fast lookups.';
+  } else if (triedAi && aiStatus === 'error') {
+    msg += ' The AI model errored; fell back to the dictionary.';
+  } else if (triedAi) {
+    msg += ' (Tried AI and the dictionary.)';
+  }
+  if (kind === 'antonyms') {
+    msg += ' Note: the dictionary rarely has antonyms — a working AI model is the reliable source.';
+  } else if (!triedAi) {
+    msg += ' Try right-click → Use AI for context-aware results.';
+  }
+  return msg;
 }
 
 /** Shared gather: AI-first (when enabled and ready) with a soft timeout, then
@@ -216,33 +278,42 @@ async function gatherWords(
   query: string,
   sentence: string,
   useAi: boolean
-): Promise<{ words: string[]; usedAi: boolean }> {
+): Promise<{ words: string[]; source: LookupSource; triedAi: boolean; aiStatus: AiStatus }> {
   const cfg = vscode.workspace.getConfiguration(EXTENSION_ID);
   const source = cfg.get<Source>(ConfigKeys.thesaurusSource, 'auto');
   const max = cfg.get<number>(ConfigKeys.thesaurusMaxResults, 20);
   const noun = kind === 'synonyms' ? 'synonyms' : 'antonyms';
-  let usedAi = false;
+  let resultSource: LookupSource = 'none';
+  let triedAi = false;
+  let aiStatus: AiStatus = 'skipped';
   const controller = new AbortController();
   const words = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Window, title: `Proser: finding ${noun}…`, cancellable: true },
     async (_p, token) => {
       token.onCancellationRequested(() => controller.abort());
       if (useAi) {
+        triedAi = true;
         const timer = setTimeout(() => controller.abort(), 15000);
         try {
           const ai = await aiSuggestions(secrets, query, sentence, kind, max, controller.signal);
-          if (ai.length > 0) {
-            usedAi = true;
-            return ai;
+          aiStatus = ai.status;
+          if (ai.words.length > 0) {
+            resultSource = 'ai';
+            return ai.words;
           }
         } finally {
           clearTimeout(timer);
         }
       }
-      return gatherSuggestions(query, kind, source, max);
+      const dict = await gatherSuggestions(query, kind, source, max);
+      resultSource = dict.source;
+      return dict.words;
     }
   );
-  return { words: dedupe(words, query).slice(0, max), usedAi };
+  const deduped = dedupe(words, query).slice(0, max);
+  const finalSource: LookupSource = deduped.length ? resultSource : 'none';
+  log(`${noun} "${query}" — aiMode=${getAiMode()} ai=${aiStatus} source=${finalSource} results=${deduped.length}`);
+  return { words: deduped, source: finalSource, triedAi, aiStatus };
 }
 
 /** Returns the capitalization-matched suggestion list (no UI). The pretty view
@@ -252,14 +323,19 @@ export async function suggestionsFor(
   kind: ThesaurusKind,
   word: string,
   sentence: string
-): Promise<string[]> {
+): Promise<{ words: string[]; sourceLabel: string; triedAi: boolean; aiStatus: AiStatus }> {
   const original = word.trim();
   const query = original.toLowerCase();
   if (!/[\p{L}]/u.test(query)) {
-    return [];
+    return { words: [], sourceLabel: '', triedAi: false, aiStatus: 'skipped' };
   }
-  const { words } = await gatherWords(secrets, kind, query, sentence, getAiMode() === 'ai');
-  return words.map((w) => matchCapitalization(original, w));
+  const lookup = await gatherWords(secrets, kind, query, sentence, getAiMode() === 'ai');
+  return {
+    words: lookup.words.map((w) => matchCapitalization(original, w)),
+    sourceLabel: sourceLabel(lookup.source),
+    triedAi: lookup.triedAi,
+    aiStatus: lookup.aiStatus
+  };
 }
 
 async function gatherSuggestions(
@@ -267,23 +343,26 @@ async function gatherSuggestions(
   kind: ThesaurusKind,
   source: Source,
   max: number
-): Promise<string[]> {
+): Promise<{ words: string[]; source: LookupSource }> {
   if (source === 'offline') {
-    return safe(() => fetchFromWordNet(word, kind, max));
+    const w = await safe(() => fetchFromWordNet(word, kind, max));
+    return { words: w, source: w.length ? 'offline' : 'none' };
   }
   if (source === 'online') {
-    return safe(() => fetchFromDatamuse(word, kind, max));
+    const w = await safe(() => fetchFromDatamuse(word, kind, max));
+    return { words: w, source: w.length ? 'online' : 'none' };
   }
   // auto: prefer Datamuse, fall back to WordNet on error or empty result.
   try {
     const online = await fetchFromDatamuse(word, kind, max);
     if (online.length > 0) {
-      return online;
+      return { words: online, source: 'online' };
     }
   } catch {
     // fall through to offline
   }
-  return safe(() => fetchFromWordNet(word, kind, max));
+  const off = await safe(() => fetchFromWordNet(word, kind, max));
+  return { words: off, source: off.length ? 'offline' : 'none' };
 }
 
 /** Best-effort AI suggestions; silent (never blocks the thesaurus) if the
@@ -295,15 +374,19 @@ async function aiSuggestions(
   kind: ThesaurusKind,
   max: number,
   signal?: AbortSignal
-): Promise<string[]> {
+): Promise<{ words: string[]; status: AiStatus }> {
   try {
     const engine = await createEngine(secrets);
-    if (!engine || !(await engine.isReady()).ready) {
-      return [];
+    if (!engine) {
+      return { words: [], status: 'off' };
     }
-    return await aiContextSuggestions(engine, word, sentence, kind, max, signal);
+    if (!(await engine.isReady()).ready) {
+      return { words: [], status: 'not-ready' };
+    }
+    const words = await aiContextSuggestions(engine, word, sentence, kind, max, signal);
+    return { words, status: words.length ? 'ok' : 'empty' };
   } catch {
-    return [];
+    return { words: [], status: signal?.aborted ? 'timeout' : 'error' };
   }
 }
 

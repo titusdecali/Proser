@@ -12,6 +12,7 @@ export const Commands = {
   useLocalSynonyms: 'proser.useLocalSynonyms',
   countWordsInSelection: 'proser.countWordsInSelection',
   addToDictionary: 'proser.addToDictionary',
+  spellSelectLanguage: 'proser.spellcheck.selectLanguage',
   openPretty: 'proser.openPretty',
   openPrettyToSide: 'proser.openPrettyToSide',
   setWordGoal: 'proser.setWordGoal',
@@ -30,8 +31,22 @@ export const Commands = {
   manuscriptPartDivider: 'proser.manuscript.partDivider',
   manuscriptTheEnd: 'proser.manuscript.theEnd',
   manuscriptExportDocx: 'proser.manuscript.exportDocx',
-  manuscriptExportPdf: 'proser.manuscript.exportPdf'
+  manuscriptExportPdf: 'proser.manuscript.exportPdf',
+  manuscriptDivider: 'proser.manuscript.divider',
+  editorChecks: 'proser.editor.checks',
+  revealInPretty: 'proser.revealInPretty',
+  insertInPretty: 'proser.insertInPretty'
 } as const;
+
+/** Webview view id for the "Issues" panel (passive voice / tense scanner). */
+export const VIEW_TYPE_ISSUES = 'proser.issuesView';
+
+/** Webview view id for the "Spelling" sidebar (misspellings for the active doc). */
+export const VIEW_TYPE_SPELLING = 'proser.spellingView';
+
+/** workspaceState keys for the Issues panel. */
+export const STATE_ISSUES_AUTOSCAN = 'proser.issues.autoScan';
+export const STATE_ISSUES_IGNORED = 'proser.issues.ignored';
 
 export const ConfigKeys = {
   thesaurusSource: 'thesaurus.source',
@@ -39,6 +54,7 @@ export const ConfigKeys = {
   thesaurusAiMode: 'thesaurus.aiMode',
   spellcheckEnabled: 'spellcheck.enabled',
   spellcheckDebounceMs: 'spellcheck.debounceMs',
+  spellcheckLanguage: 'spellcheck.language',
   qualityLintEnabled: 'qualityLint.enabled',
   wordcountStatusBarEnabled: 'wordcount.statusBarEnabled',
   wordcountIncludeCodeBlocks: 'wordcount.includeCodeBlocks',

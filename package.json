@@ -2,7 +2,7 @@
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
   "description": "Thesaurus, markdown spell check, word count, an editable pretty viewer, and an optional AI assistant — VS Code for writers.",
-  "version": "0.0.15",
+  "version": "0.0.44",
   "publisher": "titusdecali",
   "license": "MIT",
   "author": {
@@ -92,6 +92,11 @@
         "category": "Proser"
       },
       {
+        "command": "proser.spellcheck.selectLanguage",
+        "title": "Select Spell Check Language",
+        "category": "Proser"
+      },
+      {
         "command": "proser.openPretty",
         "title": "Open Pretty Editable View",
         "category": "Proser"
@@ -169,17 +174,12 @@
       },
       {
         "command": "proser.manuscript.sceneBreak",
-        "title": "Manuscript: Insert Scene Break",
+        "title": "Manuscript: Insert Scene Break (***)",
         "category": "Proser"
       },
       {
-        "command": "proser.manuscript.partDivider",
-        "title": "Manuscript: Insert Part Divider",
-        "category": "Proser"
-      },
-      {
-        "command": "proser.manuscript.theEnd",
-        "title": "Manuscript: Insert THE END",
+        "command": "proser.manuscript.divider",
+        "title": "Manuscript: Insert Divider (rule)",
         "category": "Proser"
       },
       {
@@ -211,6 +211,11 @@
           "id": "proser.manuscriptView",
           "name": "Manuscript",
           "icon": "media/manuscript.svg"
+        },
+        {
+          "type": "webview",
+          "id": "proser.spellingView",
+          "name": "Spelling"
         }
       ]
     },
@@ -320,6 +325,22 @@
           "default": 1000,
           "description": "Delay before re-checking spelling after edits, in milliseconds."
         },
+        "proser.spellcheck.language": {
+          "type": "string",
+          "enum": ["en", "es", "fr", "de", "it", "pt", "nl", "ru"],
+          "enumDescriptions": [
+            "English (built in)",
+            "Spanish — Español (downloads on first use)",
+            "French — Français (downloads on first use)",
+            "German — Deutsch (downloads on first use)",
+            "Italian — Italiano (downloads on first use)",
+            "Portuguese — Português (downloads on first use)",
+            "Dutch — Nederlands (downloads on first use)",
+            "Russian — Русский (downloads on first use)"
+          ],
+          "default": "en",
+          "markdownDescription": "Language to spell-check in. English is built in; other languages download their dictionary once (a few MB) and then work offline. Switch quickly with the **Proser: Select Spell Check Language** command. Korean/CJK aren't supported offline (the engine can't process their dictionaries)."
+        },
         "proser.qualityLint.enabled": {
           "type": "boolean",
           "default": true,
@@ -352,15 +373,15 @@
         },
         "proser.wysiwyg.fontSize": {
           "type": "number",
-          "default": 16,
+          "default": 18,
           "minimum": 12,
           "maximum": 28,
-          "description": "Font size (px) for the Proser pretty editable view."
+          "description": "Font size (px) for the Proser pretty editable view. The default 18 approximates an average book's body text at comfortable screen-reading distance."
         },
         "proser.wysiwyg.maxWidth": {
           "type": "string",
-          "default": "65ch",
-          "markdownDescription": "Maximum width of the text column in the pretty view, centered in the pane. Prefer `ch` units (characters per line) so the measure stays comfortable as you resize the font — `65ch` is the typographic sweet spot (~45–75 is ideal for reading prose). You may also use a pixel value like `720px`, or `none` for full width."
+          "default": "80ch",
+          "markdownDescription": "Width of the text column in the pretty view, centered in the pane (no border or page frame). Prefer `ch` units (characters per line) so the measure stays book-like as you zoom — the default `80ch` is a generous reading measure, and ~60–75 is the print 'average book' sweet spot. You may also use `px` (e.g. `720px`), physical units `mm`/`cm`/`in`, or `%`. Use `none` for full width."
         },
         "proser.manuscript.exclude": {
           "type": "array",
@@ -420,6 +441,7 @@
   },
   "dependencies": {
     "dictionary-en": "^4.0.0",
+    "dictionary-en-gb": "^3.0.0",
     "docx": "^9.7.1",
     "nspell": "^2.1.5",
     "pdfkit": "^0.19.1"

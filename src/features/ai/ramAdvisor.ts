@@ -42,15 +42,22 @@ function isAppleSilicon(): boolean {
   return os.platform() === 'darwin' && os.arch() === 'arm64';
 }
 
-/** Tier by available memory (GB, already usable VRAM/unified) that holds the model. */
+/**
+ * Tier by usable memory (GB of VRAM/unified that can hold the model). E4B is the
+ * default sweet spot — fast and a strong all-round writer — so it's recommended
+ * across the common laptop range; the heavier dense/MoE tiers are only suggested
+ * when there's clear headroom. "Fits in memory" isn't the same as "fast" (large
+ * dense models are sluggish without a fast GPU), so these thresholds stay
+ * conservative and the picker always lets the user switch up.
+ */
 function tierByMemory(gb: number): string {
-  if (gb >= 24) {
+  if (gb >= 48) {
     return 'gemma4:31b';
   }
-  if (gb >= 18) {
+  if (gb >= 32) {
     return 'gemma4:26b';
   }
-  if (gb >= 11) {
+  if (gb >= 20) {
     return 'gemma4:12b';
   }
   if (gb >= 7) {
