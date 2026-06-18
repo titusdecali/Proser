@@ -13,7 +13,7 @@ write on, the proofreading and reference tools writers actually need, and one-cl
 Everything works **offline**. AI is entirely optional, and can run **locally**.
 
 <div align="center">
-  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhwSRV361niRDXGW1aPAyKQlpZNVTkH6evw97E" alt="Proser running in VS Code" width="100%">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhe40cWYNRFGDY6UZ5anfBwuqkIEiAb71hd9Wc" alt="Write on a live, book-width page — the full Proser UI in VS Code" width="100%">
 </div>
 
 ---
@@ -44,7 +44,7 @@ Open it from the editor title bar (the book icon), or *Reopen Editor With… →
   *Proser: Select Spell Check Language*.
 
 <div align="center">
-  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmh3a16eat8Hsoe9Y7j6GUnVQf2AlW5Ex4bCPFO" alt="Spell check sidebar and inline squiggles" width="60%">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmh5q2H0rznrEbOo46XUwZkMeGamiK3yWtIfJqu" alt="Spell check that understands prose" width="60%">
 </div>
 
 ## 📖 Thesaurus
@@ -53,7 +53,7 @@ Right-click a word for **synonyms or antonyms** — online (Datamuse) with an of
 WordNet fallback, or **context-aware** suggestions when AI is enabled.
 
 <div align="center">
-  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhVeaiZkWcNxPzGuWkTtCMpXayUmRFr740ZsoV" alt="Synonyms in the Pretty view" width="60%">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhf2sFkJvPGJDjwRp264CZ0nIQW138ytYived7" alt="The right word, in context — synonyms in the Pretty view" width="60%">
 </div>
 
 ## 🔍 Editor checks (Proser sidebar → Editor tab)
@@ -77,7 +77,7 @@ has **Go / Fix / Ignore**, and *Go* jumps right to the passage in the Pretty vie
   Pretty toolbar's **Export** menu, alongside a quick PDF of the current view.
 
 <div align="center">
-  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhn9n9lTkLAUSNGzthslMRIE7vQT8cFXwdPB9C" alt="Manuscript export menu" width="60%">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhnuoO7xckLAUSNGzthslMRIE7vQT8cFXwdPB9" alt="Submit-ready in one click — Standard Manuscript Format export" width="60%">
 </div>
 
 ## 🤖 Optional AI assistant
@@ -89,7 +89,7 @@ has **Go / Fix / Ignore**, and *Go* jumps right to the passage in the Pretty vie
   API key lives in the OS keychain — never in settings.
 
 <div align="center">
-  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhZU4y5ZgGVnvdScZkyQ3Nm2P7jUBsLfbACh1R" alt="Revise with AI" width="60%">
+  <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhpycBm7FdnfFy61qwHZUv0as34zXbpu5Ai87P" alt="Revise with AI, your way" width="60%">
 </div>
 
 ## 📊 Word count & goals
