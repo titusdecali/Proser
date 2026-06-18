@@ -70,7 +70,7 @@ function renderList(s: State): void {
       row.appendChild(el('div', 'sugg', `→ ${it.suggestion}`));
     }
     const actions = el('div', 'actions');
-    const go = el('button', undefined, 'Go') as HTMLButtonElement;
+    const go = el('button', undefined, 'Go To') as HTMLButtonElement;
     go.disabled = it.offset < 0;
     go.addEventListener('click', () => vscode.postMessage({ type: 'go', id: it.id }));
     const fix = el('button', 'fix', 'Fix');
@@ -108,7 +108,7 @@ function render(s: State): void {
       status.textContent =
         'AI is off — only local passive-voice detection ran. Set up a model (Pretty toolbar → Model) for tense & continuity.';
     } else if (s.ran.length === 0) {
-      status.textContent = 'Run a check above. Toggle “Scan continuously” to re-check as you write.';
+      status.textContent = '';
     } else {
       const n = s.issues.length;
       const t = s.detectedTense ? ` · tense: ${s.detectedTense}` : '';
@@ -138,6 +138,109 @@ $('continuous')?.addEventListener('change', (e) =>
   vscode.postMessage({ type: 'setContinuous', enabled: (e.target as HTMLInputElement).checked })
 );
 
+// ---- Spelling section (editor-tab panel only; elements absent in the sidebar) ----
+interface SpellItem {
+  word: string;
+  suggestions: string[];
+  count: number;
+}
+function renderSpelling(s: {
+  enabled: boolean;
+  language: string;
+  items: SpellItem[];
+  docName: string;
+}): void {
+  const list = $('spList');
+  const status = $('spStatus');
+  const lang = $('spLang');
+  if (!list || !status) {
+    return; // sidebar view — no Spelling section
+  }
+  if (lang) {
+    lang.textContent = s.language ? `${s.language} · Change` : '';
+    lang.title = 'Change spelling language';
+  }
+  list.innerHTML = '';
+  if (!s.enabled) {
+    status.textContent = 'Spell check is off. Toggle it on in the Pretty toolbar or settings.';
+    return;
+  }
+  if (!s.docName) {
+    status.textContent = 'Open a Markdown file to see its spelling.';
+    return;
+  }
+  if (s.items.length === 0) {
+    status.textContent = `No misspellings in ${s.docName}.`;
+    return;
+  }
+  status.textContent = `${s.items.length} misspelling${s.items.length > 1 ? 's' : ''} in ${s.docName}`;
+
+  for (const it of s.items) {
+    const row = document.createElement('div');
+    row.className = 'sp-item';
+
+    const head = document.createElement('div');
+    head.className = 'sp-word';
+    const wordBtn = document.createElement('button');
+    wordBtn.className = 'sp-wordbtn';
+    wordBtn.textContent = it.word;
+    wordBtn.title = 'Show this word in the Pretty view';
+    wordBtn.addEventListener('click', () => vscode.postMessage({ type: 'spellReveal', word: it.word }));
+    head.appendChild(wordBtn);
+    if (it.count > 1) {
+      const c = document.createElement('span');
+      c.className = 'sp-count';
+      c.textContent = `${it.count}×`;
+      head.appendChild(c);
+    }
+    row.appendChild(head);
+
+    const suggs = document.createElement('div');
+    suggs.className = 'sp-suggs';
+    if (it.suggestions.length === 0) {
+      const none = document.createElement('span');
+      none.className = 'sp-none';
+      none.textContent = 'No suggestions';
+      suggs.appendChild(none);
+    } else {
+      it.suggestions.slice(0, 6).forEach((sg) => {
+        const b = document.createElement('button');
+        b.className = 'sp-sugg';
+        b.textContent = sg;
+        b.title = `Replace every “${it.word}” with “${sg}”`;
+        b.addEventListener('click', () =>
+          vscode.postMessage({ type: 'spellReplace', word: it.word, suggestion: sg })
+        );
+        suggs.appendChild(b);
+      });
+    }
+    row.appendChild(suggs);
+
+    const actions = document.createElement('div');
+    actions.className = 'sp-actions';
+    const add = document.createElement('button');
+    add.textContent = '＋ Add to dictionary';
+    add.addEventListener('click', () => vscode.postMessage({ type: 'spellAdd', word: it.word }));
+    const ignore = document.createElement('button');
+    ignore.className = 'sp-ignore';
+    ignore.textContent = 'Ignore';
+    ignore.title = 'Stop flagging this word (does not add it to the dictionary)';
+    ignore.addEventListener('click', () => vscode.postMessage({ type: 'spellIgnore', word: it.word }));
+    const go = document.createElement('button');
+    go.className = 'sp-go';
+    go.textContent = 'Go To';
+    go.title = 'Show this word in the Pretty view';
+    go.addEventListener('click', () => vscode.postMessage({ type: 'spellReveal', word: it.word }));
+    actions.appendChild(add);
+    actions.appendChild(ignore);
+    actions.appendChild(go);
+    row.appendChild(actions);
+
+    list.appendChild(row);
+  }
+}
+$('spLang')?.addEventListener('click', () => vscode.postMessage({ type: 'spellLanguage' }));
+
 window.addEventListener('message', (e: MessageEvent) => {
   const msg = e.data;
   if (!msg) {
@@ -145,9 +248,15 @@ window.addEventListener('message', (e: MessageEvent) => {
   }
   if (msg.type === 'state') {
     render(msg as State);
+  } else if (msg.type === 'spellState') {
+    renderSpelling(msg);
   } else if (msg.type === 'showTab') {
     showTab(msg.tab);
   }
 });
 
 vscode.postMessage({ type: 'ready' });
+// Report our pixel width so the host can size the Proser tab to its target. The
+// host only acts on this for the editor-tab panel (a simple two-group split);
+// in the activity-bar sidebar it's harmlessly ignored.
+requestAnimationFrame(() => vscode.postMessage({ type: 'measure', width: window.innerWidth }));

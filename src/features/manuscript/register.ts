@@ -8,6 +8,7 @@ import { buildDocx } from './exportDocx';
 import { buildPdf } from './exportPdf';
 import { editTitlePage, insertChapter, insertDivider, insertSceneBreak } from './inserts';
 import { MANUSCRIPT_VIEW_ID, ManuscriptSidebar } from './sidebar';
+import { SpellService } from '../spellcheck/spellService';
 
 function safeName(title: string): string {
   return (title || 'Manuscript').replace(/[^A-Za-z0-9 _-]+/g, '').trim() || 'Manuscript';
@@ -90,15 +91,15 @@ async function exportManuscript(kind: 'docx' | 'pdf', scope: Scope): Promise<voi
   }
 }
 
-export function registerManuscript(context: vscode.ExtensionContext): void {
-  const sidebar = new ManuscriptSidebar(context);
+export function registerManuscript(context: vscode.ExtensionContext, spell: SpellService): void {
+  const sidebar = new ManuscriptSidebar(context, spell);
   context.subscriptions.push(
     // Keep the webview alive when hidden so toggling it open is instant (no reload).
     vscode.window.registerWebviewViewProvider(MANUSCRIPT_VIEW_ID, sidebar, {
       webviewOptions: { retainContextWhenHidden: true }
     }),
     // Toggles the sidebar on the Editor (checks) tab — used by the Pretty toolbar.
-    vscode.commands.registerCommand(Commands.editorChecks, () => sidebar.toggleEditor()),
+    vscode.commands.registerCommand(Commands.editorChecks, () => sidebar.toggleWorkspace()),
     vscode.commands.registerCommand(Commands.manuscriptTitlePage, editTitlePage),
     vscode.commands.registerCommand(Commands.manuscriptNewChapter, insertChapter),
     vscode.commands.registerCommand(Commands.manuscriptSceneBreak, insertSceneBreak),

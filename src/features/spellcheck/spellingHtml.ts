@@ -51,7 +51,6 @@ export function getSpellingHtml(webview: vscode.Webview, extensionUri: vscode.Ur
       cursor: pointer; font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 4px;
     }
     .item .ignore { color: var(--vscode-descriptionForeground); }
-    .item .go { margin-left: auto; } /* push to the far right of the row */
     .item .go:hover, .item .add:hover, .item .ignore:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
   </style>
   <title>Spelling</title>

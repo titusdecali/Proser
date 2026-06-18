@@ -2,7 +2,7 @@
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
   "description": "Creative writing with local AI editor",
-  "version": "1.0.1",
+  "version": "1.2.5",
   "publisher": "titusdecali",
   "license": "MIT",
   "author": {
@@ -79,6 +79,11 @@
       {
         "command": "proser.useLocalSynonyms",
         "title": "Use Local Dictionary for Synonyms",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.thesaurus.selectEngine",
+        "title": "Synonym & Antonym Engine…",
         "category": "Proser"
       },
       {
@@ -162,6 +167,23 @@
         "category": "Proser"
       },
       {
+        "command": "proser.brainstorm",
+        "title": "Brainstorm with AI",
+        "category": "Proser",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "proser.editor.checks",
+        "title": "Open Proser Panel",
+        "category": "Proser",
+        "icon": "media/manuscript.svg"
+      },
+      {
+        "command": "proser.moveToSide",
+        "title": "Move Proser Panel to the Right (Secondary) Side Bar",
+        "category": "Proser"
+      },
+      {
         "command": "proser.manuscript.titlePage",
         "title": "Manuscript: Title & Author…",
         "category": "Proser",
@@ -207,15 +229,22 @@
     "views": {
       "proser": [
         {
+          "id": "proser.chaptersView",
+          "name": "Chapters",
+          "contextualTitle": "Proser Chapters"
+        },
+        {
           "type": "webview",
           "id": "proser.manuscriptView",
-          "name": "Manuscript",
-          "icon": "media/manuscript.svg"
+          "name": "Proser",
+          "icon": "media/manuscript.svg",
+          "contextualTitle": "Proser"
         },
         {
           "type": "webview",
           "id": "proser.spellingView",
-          "name": "Spelling"
+          "name": "Spelling",
+          "contextualTitle": "Proser Spelling"
         }
       ]
     },
@@ -237,13 +266,8 @@
           "group": "proser@3"
         },
         {
-          "command": "proser.useAiSynonyms",
-          "when": "editorTextFocus && resourceLangId == markdown && proser.thesaurus.aiMode != 'ai'",
-          "group": "proser@4"
-        },
-        {
-          "command": "proser.useLocalSynonyms",
-          "when": "editorTextFocus && resourceLangId == markdown && proser.thesaurus.aiMode == 'ai'",
+          "command": "proser.thesaurus.selectEngine",
+          "when": "editorTextFocus && resourceLangId == markdown",
           "group": "proser@4"
         }
       ],
@@ -269,6 +293,16 @@
           "command": "proser.toggleTypewriterMode",
           "when": "editorLangId == markdown",
           "group": "navigation@3"
+        },
+        {
+          "command": "proser.editor.checks",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@5"
+        },
+        {
+          "command": "proser.brainstorm",
+          "when": "resourceLangId == markdown",
+          "group": "navigation@4"
         },
         {
           "command": "proser.showWordStats",

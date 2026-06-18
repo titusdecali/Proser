@@ -10,8 +10,10 @@ import { registerOutline } from './features/outline/documentSymbols';
 import { registerWritingModes } from './features/focusMode/focusMode';
 import { registerAI } from './features/ai/registerAI';
 import { registerAiModelStatus } from './features/ai/aiModelStatus';
+import { registerBrainstorm } from './features/ai/brainstormPanel';
 import { registerPrettyEditor } from './features/wysiwyg/ProserEditorProvider';
 import { registerManuscript } from './features/manuscript/register';
+import { registerChaptersView } from './features/manuscript/chaptersView';
 
 /**
  * Proser extension entry point. Each feature is registered by a small
@@ -30,8 +32,10 @@ export function activate(context: vscode.ExtensionContext): void {
   registerWritingModes(context); // M5 (focus + typewriter)
   registerAI(context); // M6
   registerAiModelStatus(context); // M6 (status-bar model indicator + quick switch/delete)
+  registerBrainstorm(context); // M11 (AI brainstorming chat panel)
   registerPrettyEditor(context, spell); // M7 (Pretty editor + inline spelling squiggles)
-  registerManuscript(context); // M8 (tabbed sidebar: Editor checks / Insert / Settings)
+  registerChaptersView(context); // M8 (Chapters list in the Proser sidebar)
+  registerManuscript(context, spell); // M8 (tabbed sidebar: Editor checks / Insert / Settings + panel Spelling)
   registerSpellingView(context, spell); // M10 (dedicated Spelling sidebar)
 }
 

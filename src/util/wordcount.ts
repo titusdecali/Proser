@@ -1,8 +1,14 @@
 import { getProseSpans, ScanOptions } from './markdownScan';
 
-/** A "word": a run of letters/digits, allowing internal apostrophes/hyphens
- *  (so "don't" and "well-known" count as one word each). */
-const WORD_RE = /[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu;
+/** A "word": a run of letters/digits, joined by inline Markdown emphasis runs
+ *  (`**`, `__`, `*`, `_`, `~~`) OR a single apostrophe/hyphen — so "don't" and
+ *  "well-known" stay one word, and a styled-mid-word "**ok**ay" reads as the
+ *  whole word the reader sees ("okay") instead of the fragments "ok"+"ay". The
+ *  emphasis markers are stripped from the emitted token in `getProseTokens`. */
+const WORD_RE = /[\p{L}\p{N}]+(?:(?:[*_~]+|['’\-])[\p{L}\p{N}]+)*/gu;
+
+/** Inline emphasis markers carried by a match, removed from the emitted word. */
+const EMPHASIS_RE = /[*_~]/g;
 
 export interface ProseToken {
   word: string;
@@ -37,7 +43,9 @@ export function getProseTokens(text: string, options: ScanOptions = {}): ProseTo
     WORD_RE.lastIndex = 0;
     while ((m = WORD_RE.exec(segment)) !== null) {
       tokens.push({
-        word: m[0],
+        // Strip emphasis markers so "**ok**ay" → "okay" for the spell engine;
+        // start/end still span the original styled run in the document.
+        word: m[0].replace(EMPHASIS_RE, ''),
         start: span.start + m.index,
         end: span.start + m.index + m[0].length
       });

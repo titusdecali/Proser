@@ -75,6 +75,32 @@ describe('getProseSpans / getProseTokens', () => {
   });
 });
 
+describe('inline emphasis does not split words', () => {
+  it('rejoins a styled mid-word into one whole token', () => {
+    // Bold/italic on PART of a word must not produce fragments like "ok"+"ay".
+    assert.deepStrictEqual(
+      getProseTokens('**ok**ay').map((t) => t.word),
+      ['okay']
+    );
+    assert.deepStrictEqual(
+      getProseTokens('an _di_sturbing thing').map((t) => t.word),
+      ['an', 'disturbing', 'thing']
+    );
+  });
+  it('strips markers from whole-word emphasis', () => {
+    assert.deepStrictEqual(
+      getProseTokens('an *italic* word').map((t) => t.word),
+      ['an', 'italic', 'word']
+    );
+  });
+  it('counts a styled mid-word as a single word', () => {
+    assert.strictEqual(countTokens('**ok**ay'), 1);
+  });
+  it('still splits double hyphens (no em-dash regression)', () => {
+    assert.strictEqual(countTokens('a--b'), 2);
+  });
+});
+
 describe('computeProseStats', () => {
   it('counts words, characters, sentences, and paragraphs over prose', () => {
     const md = ['First sentence. Second one!', '', 'A new paragraph here.'].join('\n');

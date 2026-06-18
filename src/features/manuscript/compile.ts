@@ -18,16 +18,32 @@ const DEFAULT_EXCLUDE = [
   'memory'
 ];
 
+/** Last Markdown doc that was genuinely active — the fallback when focus moves to
+ *  a Proser webview (sidebar/editor-tab panel), which isn't a text editor. */
+let lastActiveMarkdownDoc: vscode.TextDocument | undefined;
+
 /** The Markdown document the user is currently looking at, raw editor or pretty. */
 export function activeMarkdownDoc(): vscode.TextDocument | undefined {
   const editor = vscode.window.activeTextEditor;
   if (editor && editor.document.languageId === MARKDOWN_LANGUAGE_ID) {
+    lastActiveMarkdownDoc = editor.document;
     return editor.document;
   }
   const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
   if (input instanceof vscode.TabInputCustom && input.viewType === VIEW_TYPE_MARKDOWN_EDITOR) {
     const key = input.uri.toString();
-    return vscode.workspace.textDocuments.find((d) => d.uri.toString() === key);
+    const found = vscode.workspace.textDocuments.find((d) => d.uri.toString() === key);
+    if (found) {
+      lastActiveMarkdownDoc = found;
+      return found;
+    }
+  }
+  // Focus is on a non-editor surface (e.g. the Proser checks/Brainstorm tab or the
+  // sidebar): keep operating on the Markdown doc the user was last in, as long as
+  // it's still open. Without this, running a check or spell scan from the Proser
+  // editor-tab panel would resolve no document and silently scan nothing.
+  if (lastActiveMarkdownDoc && !lastActiveMarkdownDoc.isClosed) {
+    return lastActiveMarkdownDoc;
   }
   return undefined;
 }
@@ -40,6 +56,26 @@ export function manuscriptFolder(): vscode.Uri | undefined {
     return vscode.Uri.joinPath(doc.uri, '..');
   }
   return vscode.workspace.workspaceFolders?.[0]?.uri;
+}
+
+/** The view column where `uri` is currently open (Pretty custom editor or raw
+ *  text editor), if any — so reveal / "Go To" can target the existing tab rather
+ *  than duplicating the file into whatever group happens to be active (e.g. the
+ *  Proser panel's). Returns undefined when the file isn't open anywhere. */
+export function columnForOpenUri(uri: vscode.Uri): vscode.ViewColumn | undefined {
+  const key = uri.toString();
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      const input = tab.input;
+      if (
+        (input instanceof vscode.TabInputCustom && input.uri.toString() === key) ||
+        (input instanceof vscode.TabInputText && input.uri.toString() === key)
+      ) {
+        return group.viewColumn;
+      }
+    }
+  }
+  return undefined;
 }
 
 function excludeSet(): string[] {

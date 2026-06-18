@@ -31,7 +31,8 @@ async function main() {
   const webviewEntries = [
     { src: 'src/webview/main.ts', out: 'media/webview.js' },
     { src: 'src/webview/manuscriptPanel.ts', out: 'media/manuscript.js' },
-    { src: 'src/webview/spellingPanel.ts', out: 'media/spelling.js' }
+    { src: 'src/webview/spellingPanel.ts', out: 'media/spelling.js' },
+    { src: 'src/webview/brainstormPanel.ts', out: 'media/brainstorm.js' }
   ];
   for (const { src, out } of webviewEntries) {
     if (fs.existsSync(src)) {

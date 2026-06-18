@@ -74,6 +74,30 @@ export class OllamaClient implements AiClient {
     return full;
   }
 
+  /** The model's max context window in tokens (from /api/show → model_info's
+   *  `<arch>.context_length`), or undefined if it can't be determined. */
+  async contextLength(): Promise<number | undefined> {
+    try {
+      const res = await fetch(this.url('/api/show'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: this.model })
+      });
+      if (!res.ok) {
+        return undefined;
+      }
+      const data = (await res.json()) as { model_info?: Record<string, unknown> };
+      for (const [k, v] of Object.entries(data.model_info ?? {})) {
+        if (k.endsWith('.context_length') && typeof v === 'number') {
+          return v;
+        }
+      }
+    } catch {
+      /* offline / unsupported — caller falls back to a default */
+    }
+    return undefined;
+  }
+
   /** Pulls the model, reporting progress. Resolves when complete. Honors an
    *  optional AbortSignal so a cancellable progress can stop the pull. */
   async pull(

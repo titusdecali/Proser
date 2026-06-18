@@ -16,3 +16,7 @@ demo/**
 node_modules/wordpos/**
 node_modules/wordnet-db/**
 node_modules/underscore/**
+node_modules/az/**
+node_modules/pdfkit/.yarn/**
+node_modules/pdfkit/.github/**
+node_modules/pdfkit/docs/**

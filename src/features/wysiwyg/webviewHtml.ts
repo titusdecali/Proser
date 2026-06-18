@@ -182,6 +182,18 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       display: inline-flex; align-items: center; justify-content: center;
       width: 32px; height: 28px; padding: 0; text-align: center; font-size: 13px;
     }
+    /* Action rows: a full-width label (Synonyms/Antonyms/Revise) plus a trailing
+       config icon. The gear governs synonyms AND antonyms (one shared icon); the
+       robot opens the AI model picker for Revise. */
+    #proser-ctx .act-group, #proser-ctx .act-row { display: flex; align-items: center; }
+    #proser-ctx .act-labels { flex: 1 1 auto; min-width: 0; }
+    #proser-ctx .act-row > [data-act="revise"] { flex: 1 1 auto; width: auto; }
+    #proser-ctx .act-cfg {
+      flex: 0 0 auto; width: 34px; height: 30px; padding: 0; align-self: center;
+      display: inline-flex; align-items: center; justify-content: center; opacity: 0.6;
+    }
+    #proser-ctx .act-cfg:hover:not(:disabled) { opacity: 1; }
+    #proser-ctx .act-cfg svg { width: 15px; height: 15px; display: block; }
 
     /* Anchored synonym/antonym card (appears under the word). */
     #proser-suggest {
@@ -356,13 +368,14 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
 </head>
 <body>
   <div id="toolbar">
-    <button id="issuesBtn" title="Editor checks — tense / passive voice / continuity — toggle the panel">Editor</button>
-    <button id="spellToggle" class="toggle" title="Toggle spell check (this view + Markdown)">Spelling</button>
-    <div class="spacer"></div>
     <div class="seg" id="modeToggle">
       <button data-mode="pretty" class="active" title="Edit in the rendered view">Pretty</button>
       <button data-mode="markdown" title="Edit the raw Markdown source">Markdown</button>
     </div>
+    <div class="spacer"></div>
+    <button id="spellToggle" class="toggle" title="Toggle spell check (this view + Markdown)">Spelling</button>
+    <button id="issuesBtn" title="Editor checks — tense / passive voice / continuity — toggle the panel">Editor</button>
+    <button id="brainstormBtn" title="Brainstorm with AI — names, plots, scene ideas…">Brainstorm</button>
     <div class="fontctl">
       <button id="fontMinus" title="Decrease font size">−</button>
       <span id="fontSize">18</span>

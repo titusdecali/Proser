@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Commands, VIEW_TYPE_MARKDOWN_EDITOR, VIEW_TYPE_SPELLING } from '../../constants';
-import { activeMarkdownDoc } from '../manuscript/compile';
+import { activeMarkdownDoc, columnForOpenUri } from '../manuscript/compile';
 import { SpellService } from './spellService';
 import { languageLabel } from './dictionaries';
 import { getSpellingHtml } from './spellingHtml';
@@ -157,7 +157,8 @@ class SpellingViewProvider implements vscode.WebviewViewProvider {
     if (!doc) {
       return;
     }
-    await vscode.commands.executeCommand('vscode.openWith', doc.uri, VIEW_TYPE_MARKDOWN_EDITOR);
+    const column = columnForOpenUri(doc.uri) ?? vscode.ViewColumn.Beside;
+    await vscode.commands.executeCommand('vscode.openWith', doc.uri, VIEW_TYPE_MARKDOWN_EDITOR, column);
     const revealed = await vscode.commands.executeCommand(
       Commands.revealInPretty,
       doc.uri.toString(),
@@ -171,7 +172,7 @@ class SpellingViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const range = new vscode.Range(doc.positionAt(m.index), doc.positionAt(m.index + m[0].length));
-    const editor = await vscode.window.showTextDocument(doc, { selection: range });
+    const editor = await vscode.window.showTextDocument(doc, { selection: range, viewColumn: column });
     editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
   }
 }

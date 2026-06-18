@@ -117,13 +117,32 @@ export class SpellService {
     }
     const opts: ScanOptions = {};
     const english = eng.language === 'en';
+    const tokens = getProseTokens(text, opts);
+
+    // Confident proper nouns: words seen capitalized (non-ALL-CAPS) mid-sentence
+    // at least once. We then skip them everywhere — so a recurring name like
+    // "Theo" isn't flagged when it happens to start a sentence. A typo like "Teh"
+    // never appears capitalized mid-sentence, so it stays flagged. English only.
+    const properNouns = new Set<string>();
+    if (english) {
+      for (const t of tokens) {
+        if (
+          /^\p{Lu}/u.test(t.word) &&
+          t.word !== t.word.toUpperCase() &&
+          !isSentenceStart(text, t.start)
+        ) {
+          properNouns.add(t.word);
+        }
+      }
+    }
+
     const seen = new Set<string>();
     const out: Misspelling[] = [];
-    for (const token of getProseTokens(text, opts)) {
+    for (const token of tokens) {
       if (seen.has(token.word) || eng.isCorrect(token.word) || this.ignored.has(token.word.toLowerCase())) {
         continue;
       }
-      if (english && isProperNoun(token.word, text, token.start)) {
+      if (english && (properNouns.has(token.word) || isProperNoun(token.word, text, token.start))) {
         continue;
       }
       seen.add(token.word);

@@ -12,9 +12,12 @@ import {
   VIEW_TYPE_MARKDOWN_EDITOR
 } from '../../constants';
 import { getNonce } from '../../util/nonce';
+import { sizeSidePanel } from '../../util/editorLayout';
 import { PROSER_THEME_VARS } from '../../util/webviewTheme';
 import { SecretStore } from '../ai/secretStore';
-import { activeMarkdownDoc } from './compile';
+import { SpellService } from '../spellcheck/spellService';
+import { languageLabel } from '../spellcheck/dictionaries';
+import { activeMarkdownDoc, columnForOpenUri } from './compile';
 import {
   CheckKind,
   Issue,
@@ -34,7 +37,8 @@ const COMMAND_BUTTONS = new Set<string>([
   Commands.manuscriptSceneBreak,
   Commands.manuscriptDivider,
   Commands.manuscriptExportDocx,
-  Commands.manuscriptExportPdf
+  Commands.manuscriptExportPdf,
+  Commands.thesaurusSelectEngine
 ]);
 
 type TargetTense = Tense | 'auto';
@@ -53,14 +57,31 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
   private detectedTense: string | null = null;
   private engineOff = false;
   private changeTimer?: ReturnType<typeof setTimeout>;
+  private spellTimer?: ReturnType<typeof setTimeout>;
   private pendingTab?: string;
+  private panel?: vscode.WebviewPanel;
 
-  constructor(private readonly context: vscode.ExtensionContext) {
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly spell: SpellService
+  ) {
     this.secrets = new SecretStore(context.secrets);
     this.continuous = context.workspaceState.get<boolean>(STATE_ISSUES_AUTOSCAN, false);
     this.ignored = new Set(context.workspaceState.get<string[]>(STATE_ISSUES_IGNORED, []));
     context.subscriptions.push(
-      vscode.workspace.onDidChangeTextDocument((e) => this.onDocChange(e))
+      vscode.workspace.onDidChangeTextDocument((e) => this.onDocChange(e)),
+      // Keep the editor-tab panel's Spelling section live (no-ops while that panel
+      // is closed; the activity-bar sidebar uses the standalone Spelling view).
+      this.spell.onDidChange(() => this.scheduleSpell()),
+      vscode.window.onDidChangeActiveTextEditor(() => this.scheduleSpell()),
+      vscode.window.tabGroups.onDidChangeTabs(() => this.scheduleSpell()),
+      vscode.window.tabGroups.onDidChangeTabGroups(() => this.scheduleSpell()),
+      vscode.workspace.onDidChangeTextDocument((e) => {
+        const doc = activeMarkdownDoc();
+        if (doc && e.document.uri.toString() === doc.uri.toString()) {
+          this.scheduleSpell();
+        }
+      })
     );
   }
 
@@ -74,25 +95,55 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage((msg) => this.onMessage(msg));
   }
 
-  /** Toggles the sidebar on the Editor (checks) tab (the Pretty toolbar button):
-   *  closes the sidebar when this view is already showing, otherwise opens/focuses
-   *  it on the Editor tab. */
-  async toggleEditor(): Promise<void> {
-    if (this.view?.visible) {
-      await vscode.commands.executeCommand('workbench.action.closeSidebar');
+  /** Opens the Proser panel (Editor checks / Insert / Settings) as a MOVABLE
+   *  editor tab — like the Brainstorm chat — so it can be split or placed
+   *  anywhere instead of fighting the side bar. Reuses the sidebar's HTML +
+   *  message logic; state is shared so the tab and side bar stay in sync. The
+   *  Pretty toolbar "Editor" button and the "p" title-bar icon both call this. */
+  /** The Editor button: toggles the Proser checks tab (Editor/Insert/Settings)
+   *  as a movable editor tab beside the active file — open on first click, close
+   *  on the next. Brainstorm is opened separately via its own toolbar button. */
+  async toggleWorkspace(): Promise<void> {
+    if (this.panel) {
+      this.panel.dispose();
       return;
     }
-    try {
-      await vscode.commands.executeCommand('workbench.view.extension.proser');
-    } catch {
-      /* container id can vary — ignore */
+    this.showPanel(vscode.ViewColumn.Beside);
+  }
+
+  /** Opens or reveals the Proser checks panel in `column` (no toggle). */
+  private showPanel(column: vscode.ViewColumn): vscode.WebviewPanel {
+    if (this.panel) {
+      this.panel.reveal(column);
+      void this.panel.webview.postMessage({ type: 'showTab', tab: 'editor' });
+      return this.panel;
     }
-    await vscode.commands.executeCommand(`${MANUSCRIPT_VIEW_ID}.focus`);
-    if (this.view) {
-      void this.view.webview.postMessage({ type: 'showTab', tab: 'editor' });
-    } else {
-      this.pendingTab = 'editor';
-    }
+    const panel = vscode.window.createWebviewPanel('proser.manuscriptPanel', 'Proser', column, {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
+    });
+    panel.iconPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'proser.svg');
+    panel.webview.html = this.html(panel.webview, true); // include the Spelling section
+    panel.webview.onDidReceiveMessage((msg) => {
+      this.onMessage(msg);
+      if (msg?.type === 'ready') {
+        void panel.webview.postMessage({ type: 'showTab', tab: 'editor' });
+      } else if (msg?.type === 'measure' && typeof msg.width === 'number') {
+        sizeSidePanel(msg.width, 350); // default the Proser tab to ≈350px
+      }
+    });
+    panel.onDidDispose(() => {
+      if (this.panel === panel) {
+        this.panel = undefined;
+      }
+    });
+    this.panel = panel;
+    // Lock this editor group so files opened from the Explorer / Quick Open land
+    // in another (unlocked) group instead of on top of Proser — even when Proser
+    // is the focused group. The new panel is the active group right now.
+    void vscode.commands.executeCommand('workbench.action.lockEditorGroup');
+    return panel;
   }
 
   private onMessage(msg: {
@@ -103,14 +154,41 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
     tense?: string;
     enabled?: boolean;
     id?: string;
+    word?: string;
+    suggestion?: string;
   }): void {
     switch (msg.type) {
       case 'ready':
         this.postState();
+        void this.refreshSpelling(); // populate the panel's Spelling section
         if (this.pendingTab) {
           void this.view?.webview.postMessage({ type: 'showTab', tab: this.pendingTab });
           this.pendingTab = undefined;
         }
+        break;
+      // Spelling section (editor-tab panel only) — mirror the Spelling sidebar.
+      case 'spellReplace':
+        if (msg.word && msg.suggestion) {
+          void this.spellReplace(msg.word, msg.suggestion);
+        }
+        break;
+      case 'spellAdd':
+        if (msg.word) {
+          void this.spell.add(msg.word); // fires onDidChange → refresh
+        }
+        break;
+      case 'spellIgnore':
+        if (msg.word) {
+          void this.spell.ignore(msg.word);
+        }
+        break;
+      case 'spellReveal':
+        if (msg.word) {
+          void this.spellReveal(msg.word);
+        }
+        break;
+      case 'spellLanguage':
+        void vscode.commands.executeCommand(Commands.spellSelectLanguage);
         break;
       case 'command':
         if (msg.command && COMMAND_BUTTONS.has(msg.command)) {
@@ -161,7 +239,7 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
   }
 
   private postState(): void {
-    void this.view?.webview.postMessage({
+    this.post({
       type: 'state',
       issues: this.merged(),
       scanning: this.scanning,
@@ -172,6 +250,12 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
       engineOff: this.engineOff,
       ran: [...this.ran]
     });
+  }
+
+  /** Posts to every live surface — the side bar view and/or the editor-tab panel. */
+  private post(msg: object): void {
+    void this.view?.webview.postMessage(msg);
+    void this.panel?.webview.postMessage(msg);
   }
 
   private async runOne(kind: CheckKind, silent: boolean): Promise<void> {
@@ -241,9 +325,11 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
       return;
     }
     const uri = vscode.Uri.parse(issue.uri);
-    // Open (or focus) the file in the Pretty editor and reveal the sentence there,
-    // so Go stays inside the Proser UI rather than the raw Markdown editor.
-    await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE_MARKDOWN_EDITOR);
+    // Reveal the file in the column it's already open in (or Beside the Proser
+    // panel if it isn't open), then highlight the sentence there — never opening
+    // a duplicate inside the Proser panel's own group.
+    const column = columnForOpenUri(uri) ?? vscode.ViewColumn.Beside;
+    await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE_MARKDOWN_EDITOR, column);
     const revealed = await vscode.commands.executeCommand(
       Commands.revealInPretty,
       issue.uri,
@@ -256,7 +342,7 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
         doc.positionAt(issue.offset),
         doc.positionAt(issue.offset + issue.length)
       );
-      await vscode.window.showTextDocument(doc, { selection: range });
+      await vscode.window.showTextDocument(doc, { selection: range, viewColumn: column });
     }
   }
 
@@ -288,7 +374,89 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
     this.postState();
   }
 
-  private html(webview: vscode.Webview): string {
+  // ── Spelling section (editor-tab panel only) ──────────────────────────────
+  private scheduleSpell(): void {
+    if (!this.panel) {
+      return; // the sidebar uses the standalone Spelling view; only the panel needs this
+    }
+    if (this.spellTimer) {
+      clearTimeout(this.spellTimer);
+    }
+    this.spellTimer = setTimeout(() => void this.refreshSpelling(), 300);
+  }
+
+  /** Computes the active doc's misspellings and posts them to the panel. */
+  private async refreshSpelling(): Promise<void> {
+    if (!this.panel) {
+      return;
+    }
+    const enabled = this.spell.enabled();
+    const language = languageLabel(this.spell.currentLanguage);
+    const doc = activeMarkdownDoc();
+    if (!doc) {
+      this.post({ type: 'spellState', enabled, language, items: [], docName: '' });
+      return;
+    }
+    const text = doc.getText();
+    const found = enabled ? await this.spell.misspellings(text) : [];
+    const items = found.map((m) => ({
+      word: m.word,
+      suggestions: m.suggestions,
+      count: countWord(text, m.word)
+    }));
+    this.post({
+      type: 'spellState',
+      enabled,
+      language,
+      items,
+      docName: doc.uri.path.split('/').pop() ?? ''
+    });
+  }
+
+  /** Replaces every whole-word occurrence of `word` with `suggestion`. */
+  private async spellReplace(word: string, suggestion: string): Promise<void> {
+    const doc = activeMarkdownDoc();
+    if (!doc) {
+      return;
+    }
+    const text = doc.getText();
+    const re = wordRegex(word);
+    const edit = new vscode.WorkspaceEdit();
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const range = new vscode.Range(doc.positionAt(m.index), doc.positionAt(m.index + m[0].length));
+      edit.replace(doc.uri, range, suggestion);
+    }
+    await vscode.workspace.applyEdit(edit); // doc change → refresh via listener
+  }
+
+  /** Shows the word in the Pretty view (falls back to a text-editor selection),
+   *  revealing the file in the column it's already open in — not the panel's. */
+  private async spellReveal(word: string): Promise<void> {
+    const doc = activeMarkdownDoc();
+    if (!doc) {
+      return;
+    }
+    const column = columnForOpenUri(doc.uri) ?? vscode.ViewColumn.Beside;
+    await vscode.commands.executeCommand('vscode.openWith', doc.uri, VIEW_TYPE_MARKDOWN_EDITOR, column);
+    const revealed = await vscode.commands.executeCommand(
+      Commands.revealInPretty,
+      doc.uri.toString(),
+      word
+    );
+    if (revealed) {
+      return;
+    }
+    const m = wordRegex(word).exec(doc.getText());
+    if (!m) {
+      return;
+    }
+    const range = new vscode.Range(doc.positionAt(m.index), doc.positionAt(m.index + m[0].length));
+    const editor = await vscode.window.showTextDocument(doc, { selection: range, viewColumn: column });
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+  }
+
+  private html(webview: vscode.Webview, includeSpelling = false): string {
     const nonce = getNonce();
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'media', 'manuscript.js')
@@ -402,6 +570,32 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
   .pm-export:hover { background: var(--vscode-button-hoverBackground); border-color: transparent; }
   .pm-export .pm-ico { background: rgba(255,255,255,0.18); color: var(--vscode-button-foreground); }
   .pm-note { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 12px 1px 2px; line-height: 1.5; }
+
+  /* Spelling section (editor-tab panel only) */
+  .sp-sec { display: flex; align-items: baseline; justify-content: space-between; margin-top: 20px; }
+  .sp-lang { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 11px;
+    color: var(--vscode-textLink-foreground); cursor: pointer; }
+  .sp-lang:hover { text-decoration: underline; }
+  #spStatus { color: var(--vscode-descriptionForeground); margin: 2px 1px 0; min-height: 16px; font-size: 12px; line-height: 1.45; }
+  #spList { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .sp-item { border: 1px solid var(--vscode-panel-border); border-left: 3px solid var(--vscode-editorError-foreground, #f14c4c);
+    border-radius: 7px; padding: 8px 10px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.06)); }
+  .sp-word { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+  .sp-wordbtn { border: none; background: transparent; color: var(--vscode-foreground); cursor: pointer; font: inherit;
+    font-weight: 600; padding: 0; text-decoration: underline wavy var(--vscode-editorError-foreground, #f14c4c);
+    text-decoration-skip-ink: none; }
+  .sp-wordbtn:hover { color: var(--vscode-textLink-foreground); }
+  .sp-count { font-size: 11px; opacity: 0.6; }
+  .sp-suggs { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 7px; }
+  .sp-sugg { border: 1px solid var(--vscode-panel-border); border-radius: 999px; cursor: pointer; font: inherit; font-size: 12px;
+    padding: 2px 10px; color: var(--vscode-foreground); background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.12)); }
+  .sp-sugg:hover { background: var(--vscode-toolbar-hoverBackground); }
+  .sp-none { font-size: 12px; opacity: 0.55; }
+  .sp-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .sp-actions button { border: 1px solid var(--vscode-panel-border); background: transparent; color: var(--vscode-foreground);
+    cursor: pointer; font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 5px; transition: background 0.12s ease; }
+  .sp-actions button:hover { background: var(--vscode-toolbar-hoverBackground); }
+  .sp-ignore { color: var(--vscode-descriptionForeground) !important; }
 </style>
 </head>
 <body>
@@ -438,6 +632,13 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
     </div>
     <div id="eStatus"></div>
     <div id="eList"></div>
+    ${
+      includeSpelling
+        ? `<div class="sec sp-sec">Spelling <span id="spLang" class="sp-lang"></span></div>
+    <div id="spStatus"></div>
+    <div id="spList"></div>`
+        : ''
+    }
   </div>
 
   <div class="panel" data-tab="insert" style="display:none">
@@ -450,6 +651,9 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
   <div class="panel" data-tab="settings" style="display:none">
     <div class="sec">Manuscript</div>
     ${cmdBtn(Commands.manuscriptTitlePage, 'Title &amp; Author…', '✎')}
+    <div class="sec">Synonyms &amp; Antonyms</div>
+    ${cmdBtn(Commands.thesaurusSelectEngine, 'Synonym Engine…', '⇄')}
+    <div class="pm-note">Pick the local AI model or a dictionary for synonym &amp; antonym lookups (right-click a word → Synonyms).</div>
     <div class="sec">Export</div>
     ${cmdBtn(Commands.manuscriptExportDocx, 'Export DOCX', '⤓', 'pm-export')}
     ${cmdBtn(Commands.manuscriptExportPdf, 'Export PDF', '⤓', 'pm-export')}
@@ -464,4 +668,20 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
 
 function isKind(v: unknown): v is CheckKind {
   return v === 'tense' || v === 'passive' || v === 'continuity';
+}
+
+/** Count of whole-word, case-sensitive occurrences of `word` in `text`. */
+function countWord(text: string, word: string): number {
+  const re = wordRegex(word);
+  let n = 0;
+  while (re.exec(text)) {
+    n++;
+  }
+  return n;
+}
+
+/** Whole-word (letter/apostrophe/hyphen boundaries), case-sensitive matcher. */
+function wordRegex(word: string): RegExp {
+  const esc = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}'’-])${esc}(?![\\p{L}'’-])`, 'gu');
 }

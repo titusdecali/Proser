@@ -10,6 +10,7 @@ export const Commands = {
   antonyms: 'proser.antonyms',
   useAiSynonyms: 'proser.useAiSynonyms',
   useLocalSynonyms: 'proser.useLocalSynonyms',
+  thesaurusSelectEngine: 'proser.thesaurus.selectEngine',
   countWordsInSelection: 'proser.countWordsInSelection',
   addToDictionary: 'proser.addToDictionary',
   spellSelectLanguage: 'proser.spellcheck.selectLanguage',
@@ -25,6 +26,10 @@ export const Commands = {
   aiSelectModel: 'proser.ai.selectModel',
   aiSetupLocal: 'proser.ai.setupLocal',
   aiSelectLocalModel: 'proser.ai.selectLocalModel',
+  brainstorm: 'proser.brainstorm',
+  brainstormClose: 'proser.brainstorm.close',
+  chaptersRefresh: 'proser.chapters.refresh',
+  moveToSide: 'proser.moveToSide',
   manuscriptTitlePage: 'proser.manuscript.titlePage',
   manuscriptNewChapter: 'proser.manuscript.newChapter',
   manuscriptSceneBreak: 'proser.manuscript.sceneBreak',
@@ -43,6 +48,9 @@ export const VIEW_TYPE_ISSUES = 'proser.issuesView';
 
 /** Webview view id for the "Spelling" sidebar (misspellings for the active doc). */
 export const VIEW_TYPE_SPELLING = 'proser.spellingView';
+
+/** Tree view id for the "Chapters" list (the manuscript folder's .md files). */
+export const VIEW_TYPE_CHAPTERS = 'proser.chaptersView';
 
 /** workspaceState keys for the Issues panel. */
 export const STATE_ISSUES_AUTOSCAN = 'proser.issues.autoScan';

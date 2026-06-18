@@ -9,6 +9,8 @@ import { currentModelName } from '../ai/aiModelStatus';
 
 type Source = 'online' | 'offline' | 'auto';
 type AiMode = 'ask' | 'ai' | 'local';
+/** A single user-facing engine choice (collapses aiMode + dictionary source). */
+type EngineChoice = 'ai' | 'online' | 'offline' | 'auto' | 'ask';
 /** Where the suggestions actually came from, for transparent UI. */
 type LookupSource = 'ai' | 'online' | 'offline' | 'none';
 /** Why the AI path did or didn't produce results — drives actionable messaging. */
@@ -55,6 +57,7 @@ export function registerThesaurus(context: vscode.ExtensionContext): void {
         3000
       );
     }),
+    vscode.commands.registerCommand(Commands.thesaurusSelectEngine, () => selectEngine(secrets)),
     vscode.languages.registerCompletionItemProvider(
       { language: MARKDOWN_LANGUAGE_ID },
       new ThesaurusCompletionProvider()
@@ -80,6 +83,16 @@ function getAiMode(): AiMode {
     .get<AiMode>(ConfigKeys.thesaurusAiMode, 'ask');
 }
 
+/** Whether to use the AI model for a lookup. Mirrors "Revise with AI": if a
+ *  model is active, use it automatically — no separate opt-in — unless the user
+ *  has explicitly pinned the engine to a dictionary ('local'). */
+function shouldUseAi(): boolean {
+  if (getAiMode() === 'local') {
+    return false; // user chose dictionary-only via the engine picker
+  }
+  return currentModelName() !== 'off'; // an Ollama/OpenRouter model is configured
+}
+
 async function setAiMode(mode: AiMode): Promise<void> {
   await vscode.workspace
     .getConfiguration(EXTENSION_ID)
@@ -89,6 +102,62 @@ async function setAiMode(mode: AiMode): Promise<void> {
 
 function syncAiModeContext(): void {
   void vscode.commands.executeCommand('setContext', AI_MODE_CONTEXT_KEY, getAiMode());
+}
+
+/** One picker to choose where synonyms & antonyms come from — collapsing the two
+ *  config knobs (aiMode + dictionary source) into a single clear choice. Marks
+ *  the current selection and applies the right combination. */
+async function selectEngine(secrets: SecretStore): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(EXTENSION_ID);
+  const mode = getAiMode();
+  const source = cfg.get<Source>(ConfigKeys.thesaurusSource, 'auto');
+  const model = currentModelName();
+  // What's effectively active right now, for the check-mark.
+  const activeId: EngineChoice =
+    mode === 'ai' ? 'ai' : mode === 'ask' ? 'ask' : source;
+
+  interface EngineItem extends vscode.QuickPickItem {
+    id: EngineChoice;
+  }
+  const make = (id: EngineChoice, label: string, detail: string): EngineItem => ({
+    id,
+    label: (id === activeId ? '$(check) ' : '') + label,
+    detail
+  });
+  const items: EngineItem[] = [
+    make(
+      'ai',
+      '$(sparkle) Local AI model',
+      model !== 'off'
+        ? `Context-aware results from your AI model (${model}). Falls back to the dictionary if it isn’t running.`
+        : 'Context-aware results from a local AI model (Ollama). Sets one up if needed.'
+    ),
+    make('online', '$(cloud) Online thesaurus (Datamuse)', 'Fast, broad word lists from the Datamuse API. Needs internet.'),
+    make('offline', '$(book) Offline dictionary (WordNet)', 'Built-in, fully offline. Sparser, and weak on antonyms.'),
+    make('auto', '$(list-unordered) Auto dictionary', 'Try Datamuse online, fall back to the offline dictionary.'),
+    make('ask', '$(wand) Automatic (recommended)', 'Use the AI model whenever one is active, otherwise the dictionary.')
+  ];
+
+  const pick = await vscode.window.showQuickPick(items, {
+    title: 'Synonym & Antonym Engine',
+    placeHolder: 'Choose where suggestions come from'
+  });
+  if (!pick) {
+    return;
+  }
+  if (pick.id === 'ai') {
+    await enableAi(secrets); // sets aiMode=ai and starts/sets up the model
+  } else if (pick.id === 'ask') {
+    await setAiMode('ask');
+    vscode.window.setStatusBarMessage('$(question) Proser: will ask which engine on the next lookup.', 3000);
+  } else {
+    await setAiMode('local');
+    await cfg.update(ConfigKeys.thesaurusSource, pick.id, vscode.ConfigurationTarget.Global);
+    vscode.window.setStatusBarMessage(
+      `$(book) Proser: synonyms now use the ${pick.id === 'online' ? 'online thesaurus' : pick.id === 'offline' ? 'offline dictionary' : 'auto dictionary'}.`,
+      3000
+    );
+  }
 }
 
 /** Switches synonyms to AI: defaults the engine to local Ollama (Gemma) when
@@ -176,25 +245,8 @@ async function runThesaurus(kind: ThesaurusKind, secrets: SecretStore): Promise<
   const sentence = doc.lineAt(range.start.line).text.trim();
   const noun = kind === 'synonyms' ? 'synonyms' : 'antonyms';
 
-  // Decide whether to use AI for this lookup, prompting once if undecided.
-  let useAi = getAiMode() === 'ai';
-  if (getAiMode() === 'ask' && vscode.workspace.isTrusted) {
-    const choice = await vscode.window.showInformationMessage(
-      'Use a local AI model (Gemma) for richer, context-aware synonyms and antonyms? ' +
-        'You can switch anytime from the editor right-click menu.',
-      'Use AI',
-      'Local dictionary only'
-    );
-    if (choice === 'Use AI') {
-      await enableAi(secrets);
-      useAi = true;
-    } else if (choice === 'Local dictionary only') {
-      await setAiMode('local');
-    }
-    // Dismissed: use the dictionary this once and ask again next time.
-  }
-
-  const lookup = await gatherWords(secrets, kind, query, sentence, useAi);
+  // Use the active AI model automatically (like Revise); dictionary otherwise.
+  const lookup = await gatherWords(secrets, kind, query, sentence, shouldUseAi());
   const unique = lookup.words;
   if (unique.length === 0) {
     vscode.window.showInformationMessage(
@@ -254,18 +306,19 @@ export function noResultsMessage(
 ): string {
   let msg = `No ${noun} found for “${original}”.`;
   if (triedAi && (aiStatus === 'not-ready' || aiStatus === 'off')) {
-    msg += ' The AI model isn’t running — click the model name (footer / status bar) to start or set it up.';
+    msg += ' The AI model isn’t running — click the model name in the status bar to start it.';
   } else if (triedAi && aiStatus === 'timeout') {
-    msg += ' The AI model timed out — gemma4:12b is slow; switch to E4B for fast lookups.';
+    msg += ' The AI model timed out — a smaller, faster model (e.g. gemma4:e4b) helps.';
   } else if (triedAi && aiStatus === 'error') {
-    msg += ' The AI model errored; fell back to the dictionary.';
+    msg += ' The AI model errored, and the dictionary had nothing either.';
   } else if (triedAi) {
-    msg += ' (Tried AI and the dictionary.)';
-  }
-  if (kind === 'antonyms') {
-    msg += ' Note: the dictionary rarely has antonyms — a working AI model is the reliable source.';
-  } else if (!triedAi) {
-    msg += ' Try right-click → Use AI for context-aware results.';
+    msg += ' The AI model and dictionary both came up empty — try a more common word form.';
+  } else {
+    // No AI was used (no model is active).
+    msg += ' Set up a local AI model (status bar → Model) for context-aware results.';
+    if (kind === 'antonyms') {
+      msg += ' Antonyms especially need a model — the dictionary rarely has them.';
+    }
   }
   return msg;
 }
@@ -329,7 +382,7 @@ export async function suggestionsFor(
   if (!/[\p{L}]/u.test(query)) {
     return { words: [], sourceLabel: '', triedAi: false, aiStatus: 'skipped' };
   }
-  const lookup = await gatherWords(secrets, kind, query, sentence, getAiMode() === 'ai');
+  const lookup = await gatherWords(secrets, kind, query, sentence, shouldUseAi());
   return {
     words: lookup.words.map((w) => matchCapitalization(original, w)),
     sourceLabel: sourceLabel(lookup.source),

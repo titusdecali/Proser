@@ -99,7 +99,9 @@ interface FromWebview {
     | 'toggleSpellcheck'
     | 'addToDictionary'
     | 'selectModel'
+    | 'thesaurusEngine'
     | 'showIssues'
+    | 'openBrainstorm'
     | 'exportMenu'
     | 'exportPdf'
     | 'exportError'
@@ -349,9 +351,22 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
           // Same picker as the status bar — switch model / manage pulled models.
           await vscode.commands.executeCommand(Commands.aiSelectLocalModel);
           break;
+        case 'thesaurusEngine':
+          // The gear by Synonyms/Antonyms — choose AI model vs dictionary.
+          await vscode.commands.executeCommand(Commands.thesaurusSelectEngine);
+          break;
         case 'showIssues':
           // Open the Proser sidebar on the Editor (tense/passive/continuity) tab.
           await vscode.commands.executeCommand(Commands.editorChecks);
+          break;
+        case 'openBrainstorm':
+          try {
+            await vscode.commands.executeCommand(Commands.brainstorm);
+          } catch (err) {
+            void vscode.window.showErrorMessage(
+              `Couldn’t open Brainstorm: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
           break;
         case 'exportMenu':
           await showExportMenu(panel);

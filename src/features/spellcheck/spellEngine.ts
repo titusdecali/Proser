@@ -3,6 +3,18 @@ import { UserDictionary } from './userDictionary';
 
 type Speller = ReturnType<typeof nspell>;
 
+/** The base of an English possessive, or null if the token isn't one:
+ *  "else's"/"Dana's" → "else"/"Dana"; "dogs'" → "dogs". */
+function stripPossessive(token: string): string | null {
+  if (/['’]s$/.test(token)) {
+    return token.slice(0, -2);
+  }
+  if (/s['’]$/.test(token)) {
+    return token.slice(0, -1);
+  }
+  return null;
+}
+
 /** Raw Hunspell dictionary data (Buffers) for one locale. */
 export interface DictData {
   aff: Buffer;
@@ -27,6 +39,18 @@ const COMPOUND_STOP_FIRST = new Set([
   'has', 'have', 'its', 'our', 'your', 'their', 'them', 'they', 'this', 'that',
   'then', 'than', 'with', 'from', 'not'
 ]);
+
+/** Productive *derivational* suffixes the Hunspell dictionary often doesn't list
+ *  (agent nouns, nominalizations, adjectives) — so "recycle"→"recycler",
+ *  "disrupt"→"disruptor", "happy"→"happiness", "recycle"→"recyclable" aren't
+ *  flagged. Inflectional suffixes (-ed/-ing/-s) are deliberately excluded:
+ *  Hunspell already generates those with the correct consonant-doubling, so
+ *  un-doubled typos like "occured" stay flagged. Longest-first. */
+const DERIV_SUFFIXES = [
+  'ization', 'isation', 'ation', 'ities', 'ments', 'able', 'ible', 'ness',
+  'ment', 'less', 'ful', 'ity', 'ism', 'isms', 'ist', 'ists', 'ize', 'ise',
+  'ers', 'ors', 'er', 'or'
+].sort((a, b) => b.length - a.length);
 
 /**
  * Language-aware Hunspell wrapper over nspell. English uses BOTH the US and
@@ -131,12 +155,58 @@ export class SpellEngine {
       return true;
     }
     if (this.language === 'en') {
-      return token
-        .split('-')
-        .every((part) => this.partCorrect(part) || this.closedCompoundOk(part));
+      if (this.accepted(token)) {
+        return true;
+      }
+      // Possessives: "else's", "boss's", "dogs'" — accept if the base is fine.
+      const base = stripPossessive(token);
+      return base !== null && this.accepted(base);
     }
     // Other languages: each hyphen part must simply be a known word.
     return token.split('-').every((part) => this.known(part));
+  }
+
+  /** English acceptance for a (possibly hyphenated) word: each part is a known
+   *  word, a known prefix+stem, or a clean closed compound. */
+  private englishWordOk(token: string): boolean {
+    return token
+      .split('-')
+      .every((part) => this.partCorrect(part) || this.closedCompoundOk(part));
+  }
+
+  /** A directly-valid English word OR a productive derivation of one. */
+  private accepted(token: string): boolean {
+    return this.englishWordOk(token) || this.derivedOk(token);
+  }
+
+  /** Accepts a productive *derivation* of a known stem that the dictionary lacks
+   *  ("recycle"→"recycler", "disrupt"→"disruptor", "happy"→"happiness"). Tries
+   *  each derivational suffix with the usual spelling reconstructions (drop-e,
+   *  y-restoration, de-doubling). Only fires as a fallback for words the normal
+   *  checks reject, so cost is bounded to would-be misspellings. English only. */
+  private derivedOk(word: string): boolean {
+    const lw = word.toLowerCase();
+    if (lw.length < 5) {
+      return false;
+    }
+    for (const suf of DERIV_SUFFIXES) {
+      if (lw.length <= suf.length + 2 || !lw.endsWith(suf)) {
+        continue;
+      }
+      const stem = lw.slice(0, -suf.length);
+      const candidates = [stem, stem + 'e']; // drop-e: "recycle" → "recycler"
+      if (stem.endsWith('i')) {
+        candidates.push(stem.slice(0, -1) + 'y'); // "happi" → "happy"
+      }
+      const last = stem[stem.length - 1];
+      if (stem.length >= 3 && last === stem[stem.length - 2] && !'aeiou'.includes(last)) {
+        candidates.push(stem.slice(0, -1)); // de-double: "runner" → "run"
+      }
+      if (candidates.some((c) => c.length >= 2 && this.englishWordOk(c))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   suggest(word: string): string[] {

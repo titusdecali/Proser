@@ -289,6 +289,18 @@ function ensureMenu(): HTMLElement {
   if (ctxMenu) {
     return ctxMenu;
   }
+  // Inline SVGs (currentColor) so the icons theme with the menu text.
+  const gearSvg =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+    '<circle cx="12" cy="12" r="3"/>' +
+    '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+  const robotSvg =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+    '<rect x="4" y="9" width="16" height="11" rx="2.5"/>' +
+    '<path d="M12 9V5"/><circle cx="12" cy="4" r="1.1"/>' +
+    '<path d="M2 14v2"/><path d="M22 14v2"/>' +
+    '<circle cx="9" cy="14" r="1" fill="currentColor" stroke="none"/>' +
+    '<circle cx="15" cy="14" r="1" fill="currentColor" stroke="none"/></svg>';
   const menu = document.createElement('div');
   menu.id = 'proser-ctx';
   menu.innerHTML =
@@ -299,9 +311,21 @@ function ensureMenu(): HTMLElement {
     '<button data-fmt="strike" title="Strikethrough"><s>S</s></button>' +
     '<button data-fmt="code" title="Inline code">&lt;/&gt;</button>' +
     '</div>' +
+    '<div class="act-group">' +
+    '<div class="act-labels">' +
     '<button data-act="synonyms">Synonyms</button>' +
     '<button data-act="antonyms">Antonyms</button>' +
-    '<button data-act="revise">Revise with AI</button>';
+    '</div>' +
+    '<button class="act-cfg" data-act="synEngine" title="Synonym & antonym engine — AI model or dictionary">' +
+    gearSvg +
+    '</button>' +
+    '</div>' +
+    '<div class="act-row">' +
+    '<button data-act="revise">Revise with AI</button>' +
+    '<button class="act-cfg" data-act="reviseModel" title="Change the AI model">' +
+    robotSvg +
+    '</button>' +
+    '</div>';
   menu.addEventListener('mousedown', (e) => e.preventDefault()); // keep the selection
   menu.addEventListener('click', (e) => {
     e.stopPropagation(); // don't let this click reach the "click outside" closer
@@ -324,6 +348,10 @@ function ensureMenu(): HTMLElement {
     } else if (act === 'revise') {
       pendingReviseText = pendingSelText;
       showRevisePrompt('');
+    } else if (act === 'synEngine') {
+      vscode.postMessage({ type: 'thesaurusEngine' }); // gear → engine picker
+    } else if (act === 'reviseModel') {
+      vscode.postMessage({ type: 'selectModel' }); // robot → AI model picker
     }
   });
   document.body.appendChild(menu);
@@ -1393,6 +1421,7 @@ $('model')?.addEventListener('click', () => vscode.postMessage({ type: 'selectMo
 $('fontMinus')?.addEventListener('click', () => changeFont(-1));
 $('fontPlus')?.addEventListener('click', () => changeFont(1));
 $('issuesBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'showIssues' }));
+$('brainstormBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'openBrainstorm' }));
 $('exportBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'exportMenu' }));
 wireFind();
 
