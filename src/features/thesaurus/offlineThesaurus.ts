@@ -10,7 +10,7 @@ import type { ThesaurusKind } from './datamuseClient';
 let wordposInstance: any | undefined;
 let unavailable = false;
 
-async function getWordpos(): Promise<any | undefined> {
+export async function getWordpos(): Promise<any | undefined> {
   if (unavailable) {
     return undefined;
   }

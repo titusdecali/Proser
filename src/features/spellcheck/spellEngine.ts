@@ -1,5 +1,6 @@
 import nspell from 'nspell';
 import { UserDictionary } from './userDictionary';
+import { SUPPLEMENTAL_WORDS } from './supplementalWords';
 
 type Speller = ReturnType<typeof nspell>;
 
@@ -75,6 +76,14 @@ export class SpellEngine {
   /** Builds the spell instances from loaded dictionary data + the user words. */
   load(dicts: DictData[]): void {
     this.spellers = dicts.map((d) => nspell(d));
+    // Common real words / sounds the base dictionaries miss (English only) — added
+    // as exact entries so they clear instantly without an AI call, never expanding
+    // by affix (so a typo can't sneak through). Long tail handled by AI clearing.
+    if (this.language === 'en') {
+      for (const word of SUPPLEMENTAL_WORDS) {
+        this.add(word);
+      }
+    }
     for (const word of this.userDict.all()) {
       this.add(word);
     }

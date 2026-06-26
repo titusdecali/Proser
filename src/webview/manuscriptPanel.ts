@@ -2,6 +2,8 @@
 // Tabbed UI: Editor (tense / passive / continuity checks), Insert, Settings.
 // All command ids come from data-attributes the host renders, so this stays generic.
 
+import { onHostMessage } from './messaging';
+
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
 const $ = (id: string) => document.getElementById(id);
@@ -241,19 +243,134 @@ function renderSpelling(s: {
 }
 $('spLang')?.addEventListener('click', () => vscode.postMessage({ type: 'spellLanguage' }));
 
-window.addEventListener('message', (e: MessageEvent) => {
-  const msg = e.data;
-  if (!msg) {
+onHostMessage({
+  state: (msg) => render(msg as State),
+  spellState: (msg) => renderSpelling(msg),
+  settingsOptions: (msg) => onSettingsOptions(msg),
+  showTab: (msg) => showTab(msg.tab)
+});
+
+// ---- Settings: one AI model + Synonyms / Spell Check Type ----
+// Single-model design: one AI model serves every feature, so each section is just a
+// selector + a gear (manage models / thesaurus settings / dictionary language).
+interface ModelOpt {
+  tag: string;
+  label: string;
+}
+const SYN_TYPES: Array<[string, string]> = [
+  ['ai', 'AI model'],
+  ['online', 'Online (Datamuse)'],
+  ['offline', 'Offline (WordNet)']
+];
+const SPELL_TYPES: Array<[string, string]> = [
+  ['ai', 'AI model'],
+  ['offline', 'Offline (dictionary)']
+];
+const SPACING_TYPES: Array<[string, string]> = [
+  ['none', 'None'],
+  ['1', '1 space'],
+  ['2', '2 spaces']
+];
+const QUOTE_STYLES: Array<[string, string]> = [
+  ['inside', 'Inside (American)'],
+  ['outside', 'Outside (British)'],
+  ['off', 'Off']
+];
+
+function fillSelect(sel: HTMLSelectElement | null, items: Array<[string, string]>, selected: string): void {
+  if (!sel) {
     return;
   }
-  if (msg.type === 'state') {
-    render(msg as State);
-  } else if (msg.type === 'spellState') {
-    renderSpelling(msg);
-  } else if (msg.type === 'showTab') {
-    showTab(msg.tab);
+  sel.textContent = '';
+  for (const [v, l] of items) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = l;
+    sel.appendChild(o);
   }
-});
+  // Select the requested value, else the first option.
+  sel.value = items.some(([v]) => v === selected) ? selected : items[0]?.[0] ?? '';
+}
+
+/** Builds the AI Model dropdown: the system-fitting writing models + a Cloud row.
+ *  An "AI off" placeholder leads when no engine is active so a real pick always
+ *  fires a change. (Add / remove models is the gear button beside it.) */
+function renderEditorModel(
+  models: ModelOpt[],
+  editor: { value: string; cloudLabel: string; off: boolean }
+): void {
+  const items: Array<[string, string]> = [];
+  if (editor.off) {
+    items.push(['__off__', '⚠ AI off — pick a model to enable']);
+  }
+  for (const m of models) {
+    items.push([m.tag, m.label]);
+  }
+  items.push([
+    '__cloud__',
+    editor.cloudLabel ? `☁ Cloud (OpenRouter) · ${editor.cloudLabel}` : '☁ Cloud (OpenRouter)…'
+  ]);
+  fillSelect($('editorModel') as HTMLSelectElement | null, items, editor.value);
+}
+
+function onSettingsOptions(d: {
+  editorModels: ModelOpt[];
+  editor: { value: string; cloudLabel: string; off: boolean };
+  synType: string;
+  spellType: string;
+  spacing: string;
+  quoteStyle?: string;
+  passiveVoice: boolean;
+  tenseCheck: boolean;
+  grammarCheck: boolean;
+}): void {
+  renderEditorModel(d.editorModels || [], d.editor || { value: '', cloudLabel: '', off: true });
+  fillSelect($('synType') as HTMLSelectElement | null, SYN_TYPES, d.synType);
+  fillSelect($('spellType') as HTMLSelectElement | null, SPELL_TYPES, d.spellType);
+  fillSelect($('spacingType') as HTMLSelectElement | null, SPACING_TYPES, d.spacing || '1');
+  fillSelect($('quoteStyle') as HTMLSelectElement | null, QUOTE_STYLES, d.quoteStyle || 'inside');
+  const grammar = $('grammarCheck') as HTMLInputElement | null;
+  if (grammar) {
+    grammar.checked = d.grammarCheck !== false;
+  }
+  const passive = $('passiveCheck') as HTMLInputElement | null;
+  if (passive) {
+    passive.checked = d.passiveVoice !== false;
+  }
+  const tense = $('tenseCheck') as HTMLInputElement | null;
+  if (tense) {
+    tense.checked = d.tenseCheck !== false;
+  }
+}
+
+// Each section: a Type/Model selector + a gear (posts a message the host handles).
+$('synType')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setSynonyms', kind: (e.target as HTMLSelectElement).value })
+);
+$('spellType')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setSpell', kind: (e.target as HTMLSelectElement).value })
+);
+$('spacingType')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setSpacing', value: (e.target as HTMLSelectElement).value })
+);
+$('quoteStyle')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setQuoteStyle', value: (e.target as HTMLSelectElement).value })
+);
+$('passiveCheck')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setPassiveCheck', enabled: (e.target as HTMLInputElement).checked })
+);
+$('tenseCheck')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setTenseCheck', enabled: (e.target as HTMLInputElement).checked })
+);
+$('grammarCheck')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setGrammarCheck', enabled: (e.target as HTMLInputElement).checked })
+);
+$('editorModel')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setEditor', value: (e.target as HTMLSelectElement).value })
+);
+$('editorManage')?.addEventListener('click', () => vscode.postMessage({ type: 'editorManage' }));
+$('synManage')?.addEventListener('click', () => vscode.postMessage({ type: 'synManage' }));
+$('spellManage')?.addEventListener('click', () => vscode.postMessage({ type: 'spellManage' }));
 
 vscode.postMessage({ type: 'ready' });
 // Report our pixel width so the host can size the Proser tab to its target. The

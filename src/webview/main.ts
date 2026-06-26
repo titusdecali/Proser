@@ -1,6 +1,9 @@
 import * as toastui from '@toast-ui/editor';
 import '@toast-ui/editor/dist/toastui-editor.css';
 import html2pdf from 'html2pdf.js';
+import { onHostMessage } from './messaging';
+import { HostToWebviewType } from './protocol';
+import { splitFrontmatter, blockifyComments } from './proseText';
 
 // Toast UI exposes the Editor class as a default (UMD) export.
 const Editor: any = (toastui as any).default ?? (toastui as any).Editor ?? toastui;
@@ -12,6 +15,9 @@ let editor: any;
 let applyingRemote = false;
 let suppressChange = false;
 let initializing = true;
+// Set true once the document is rendered and visible. Until then NO checks
+// (spell/grammar/tense/passive/spacing) run, so opening a file never waits on one.
+let displayed = false;
 // Only a genuine user input (typing/paste) may write back — so viewing or
 // switching modes never dirties the file (and the tab closes without a prompt).
 let userTyping = false;
@@ -25,13 +31,6 @@ let maxWidth = '80ch';
 let exportFilename = 'document.pdf';
 
 const $ = (id: string) => document.getElementById(id);
-
-/** Split YAML frontmatter off the top so Toast UI never round-trips (and
- *  mangles) it. The frontmatter is preserved byte-for-byte. */
-function splitFrontmatter(text: string): { fm: string; body: string } {
-  const m = /^(---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?)/.exec(text);
-  return m ? { fm: m[1], body: text.slice(m[1].length) } : { fm: '', body: text };
-}
 
 /** The full markdown the document should hold = preserved frontmatter + body. */
 function currentMarkdown(): string {
@@ -74,6 +73,16 @@ function scrollableEditorEl(): HTMLElement | null {
   return null;
 }
 
+/** Reflects `currentMode` on the toolbar toggle so the highlighted button always
+ *  matches what's actually shown — including when the WYSIWYG fallback silently
+ *  drops us into Markdown source mode (otherwise "Pretty" stays lit over raw
+ *  markdown, which reads like both modes are open at once). */
+function syncModeButtons(): void {
+  document.querySelectorAll('#modeToggle button').forEach((b) => {
+    b.classList.toggle('active', (b as HTMLElement).dataset.mode === currentMode);
+  });
+}
+
 function setMode(mode: 'pretty' | 'markdown'): void {
   if (mode === currentMode) {
     return;
@@ -87,9 +96,7 @@ function setMode(mode: 'pretty' | 'markdown'): void {
 
   currentMode = mode;
   userTyping = false; // a mode switch is never a user edit
-  document.querySelectorAll('#modeToggle button').forEach((b) => {
-    b.classList.toggle('active', (b as HTMLElement).dataset.mode === mode);
-  });
+  syncModeButtons();
   withSuppressed(() => {
     if (mode === 'markdown') {
       changeMode('markdown'); // raw Markdown source editing
@@ -166,16 +173,6 @@ function applyMaxWidth(value: string): void {
     `box-sizing:border-box;}`;
 }
 
-/** Shows the active AI model in the footer (within the page frame); click to switch. */
-function renderModel(name: string): void {
-  const el = $('model');
-  if (!el) {
-    return;
-  }
-  el.textContent = !name || name === 'off' ? '✦ AI: off' : '✦ ' + name;
-  el.title = name === 'off' ? 'Set up an AI model' : `AI model: ${name} — click to switch`;
-}
-
 let spellcheckOn = true;
 
 /** Reflects spell-check state on the toolbar toggle and (re)paints Proser's own
@@ -195,6 +192,7 @@ function applySpellcheck(on: boolean): void {
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
   }
   paintMisspellings(); // repaint when on, clear when off
+  paintGrammar();
 }
 
 /** User flipped the toggle: update this view and tell the host to flip the
@@ -273,6 +271,159 @@ function renderStats(s: any): void {
   }
 }
 
+// ---- "N words selected" beside the stats (blue) ----
+// Shows the selected word count while text is selected in the editor; hidden when
+// nothing (or only a single word) is selected.
+function selectedWordCount(): number {
+  let text = '';
+  try {
+    if (editor && typeof editor.getSelectedText === 'function') {
+      text = editor.getSelectedText() || '';
+    }
+  } catch {
+    /* fall through to the DOM selection */
+  }
+  if (!text) {
+    const ds = window.getSelection();
+    text = ds ? ds.toString() : '';
+  }
+  return (text.match(/\S+/g) || []).length;
+}
+function updateSelectionStats(): void {
+  const el = $('selStats');
+  if (!el) {
+    return;
+  }
+  const n = selectedWordCount();
+  // Only when MORE THAN ONE word is selected (a single word / caret shows nothing).
+  el.textContent = n > 1 ? `· ${n.toLocaleString()} words selected` : '';
+}
+let selStatsTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleSelectionStats(): void {
+  if (selStatsTimer) {
+    clearTimeout(selStatsTimer);
+  }
+  selStatsTimer = setTimeout(updateSelectionStats, 80); // coalesce drag/selection churn
+}
+
+// ---- Em-dash auto-convert: "--" → "—", and a third dash reverts "—-" → "---" ----
+// Works in both Pretty (ProseMirror) and Markdown (CodeMirror) via Toast UI's
+// replaceSelection. The revert means typing three dashes yields "---", so markdown
+// frontmatter / horizontal rules / table separators are preserved.
+let emDashBusy = false;
+function autoEmDash(): void {
+  if (emDashBusy || !editor) {
+    return;
+  }
+  const sel = window.getSelection();
+  if (!sel || !sel.isCollapsed || !sel.anchorNode || sel.anchorNode.nodeType !== Node.TEXT_NODE) {
+    return;
+  }
+  const off = sel.anchorOffset;
+  if (off < 2) {
+    return;
+  }
+  const text = sel.anchorNode.textContent || '';
+  const pair = text.slice(off - 2, off);
+  let replacement = '';
+  if (pair === '—-') {
+    replacement = '---'; // third dash → put the three hyphens back
+  } else if (pair === '--' && text[off - 3] !== '-') {
+    replacement = '—'; // two hyphens → em dash (not when extending a longer run)
+  } else {
+    return;
+  }
+  let range: [number, number] | [number[], number[]] | undefined;
+  try {
+    range = editor.getSelection();
+  } catch {
+    return;
+  }
+  const end = range?.[1];
+  if (end == null) {
+    return;
+  }
+  emDashBusy = true;
+  try {
+    if (Array.isArray(end)) {
+      editor.replaceSelection(replacement, [end[0], end[1] - 2], end); // markdown [line, ch]
+    } else {
+      editor.replaceSelection(replacement, end - 2, end); // wysiwyg numeric position
+    }
+  } catch {
+    /* leave the dashes as typed on any failure */
+  } finally {
+    emDashBusy = false;
+  }
+}
+
+// ---- AI model status (bottom-right of the frame) ----
+// Ref-counted per model tag so overlapping passes (e.g. spell + revise on the same
+// model) don't clear each other's "processing" pulse.
+const aiBusyCounts: Record<string, number> = {};
+function roleWord(r: string): string {
+  return r === 'write' ? 'Brainstorm & Revise' : r === 'spell' ? 'Spell check' : r === 'synonyms' ? 'Synonyms' : r;
+}
+function applyAiBusyClasses(el: HTMLElement): void {
+  el.querySelectorAll('.aichip').forEach((c) => {
+    const tag = (c as HTMLElement).dataset.tag || '';
+    c.classList.toggle('busy', (aiBusyCounts[tag] || 0) > 0);
+  });
+}
+function renderAiStatus(chips: Array<{ tag: string; label: string; roles: string[]; kind: string }>): void {
+  const el = $('aiStatus');
+  if (!el) {
+    return;
+  }
+  el.innerHTML = '';
+  for (const c of chips || []) {
+    const chip = document.createElement('span');
+    chip.className = 'aichip kind-' + (c.kind === 'dictionary' ? 'dictionary' : 'ai');
+    chip.dataset.tag = c.tag || '';
+    const roles = (c.roles || []).map(roleWord).join(' · ');
+    chip.title =
+      c.kind === 'dictionary'
+        ? 'Spell check: dictionary only (no AI clearing). Set the Spell Check model to a capable model (or "Use my editor model") to clear names, coined words, and sounds.'
+        : `${c.label} — ${roles}`;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = c.label;
+    chip.append(dot, lbl);
+    el.appendChild(chip);
+  }
+  applyAiBusyClasses(el); // keep pulse if a pass is in flight while status re-renders
+}
+function setAiBusy(tag: string, on: boolean): void {
+  aiBusyCounts[tag] = Math.max(0, (aiBusyCounts[tag] || 0) + (on ? 1 : -1));
+  const el = $('aiStatus');
+  if (el) {
+    applyAiBusyClasses(el);
+  }
+}
+// Footer text load-state + VRAM, beside the model chip.
+function renderModelState(s: { status: string; vramGb: number }): void {
+  const st = $('aiState');
+  const vr = $('aiVram');
+  if (st) {
+    st.textContent =
+      s.status === 'ready'
+        ? 'Model Ready'
+        : s.status === 'loading'
+          ? 'Loading Model…'
+          : s.status === 'idle'
+            ? 'Idle'
+            : '';
+    st.className = s.status === 'ready' ? 'st-ready' : s.status === 'loading' ? 'st-loading' : '';
+  }
+  if (vr) {
+    const show = s.status !== 'off' && s.vramGb > 0;
+    vr.textContent = show ? `${s.vramGb} GB VRAM` : '';
+    vr.title = show ? 'GPU / unified memory the loaded model is using' : '';
+  }
+}
+
 // ---- Pretty-view context menu + anchored suggestion card ----
 let pendingSelText = '';
 let pendingSelection: any = null;
@@ -301,15 +452,21 @@ function ensureMenu(): HTMLElement {
     '<path d="M2 14v2"/><path d="M22 14v2"/>' +
     '<circle cx="9" cy="14" r="1" fill="currentColor" stroke="none"/>' +
     '<circle cx="15" cy="14" r="1" fill="currentColor" stroke="none"/></svg>';
+  const bookSvg =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15.5H6.5A2.5 2.5 0 0 0 4 21z"/>' +
+    '<path d="M4 5.5A2.5 2.5 0 0 0 6.5 8H20"/></svg>';
   const menu = document.createElement('div');
   menu.id = 'proser-ctx';
   menu.innerHTML =
     '<div class="fmt">' +
+    '<button class="dict" data-act="define" title="Dictionary — look up definition">' +
+    bookSvg +
+    '</button>' +
     '<button data-fmt="bold" title="Bold (Ctrl+B)"><b>B</b></button>' +
     '<button data-fmt="italic" title="Italic (Ctrl+I)"><i>I</i></button>' +
     '<button data-fmt="underline" title="Underline (Ctrl+U)"><u>U</u></button>' +
     '<button data-fmt="strike" title="Strikethrough"><s>S</s></button>' +
-    '<button data-fmt="code" title="Inline code">&lt;/&gt;</button>' +
     '</div>' +
     '<div class="act-group">' +
     '<div class="act-labels">' +
@@ -338,7 +495,9 @@ function ensureMenu(): HTMLElement {
     }
     const act = (target.closest('[data-act]') as HTMLElement | null)?.dataset.act;
     hideMenu();
-    if (act === 'synonyms' || act === 'antonyms') {
+    if (act === 'define') {
+      vscode.postMessage({ type: 'definitionRequest', word: pendingSelText.trim() });
+    } else if (act === 'synonyms' || act === 'antonyms') {
       vscode.postMessage({
         type: 'thesaurusRequest',
         kind: act,
@@ -367,11 +526,13 @@ function isSingleWord(text: string): boolean {
 
 function openMenu(x: number, y: number): void {
   const menu = ensureMenu();
-  // Synonyms/Antonyms only make sense for a single word — disable them for
-  // multi-word selections and hyphenated phrases. "Revise with AI" still works.
+  // Dictionary/Synonyms/Antonyms only make sense for a single word — disable them
+  // for multi-word selections and hyphenated phrases. "Revise with AI" still works.
   const wordEligible = isSingleWord(pendingSelText);
   menu
-    .querySelectorAll<HTMLButtonElement>('[data-act="synonyms"], [data-act="antonyms"]')
+    .querySelectorAll<HTMLButtonElement>(
+      '[data-act="define"], [data-act="synonyms"], [data-act="antonyms"]'
+    )
     .forEach((btn) => {
       btn.disabled = !wordEligible;
     });
@@ -461,6 +622,7 @@ function hideSuggestions(): void {
     suggestCard.remove();
     suggestCard = undefined;
   }
+  spellCardWord = '';
 }
 function hideRevise(): void {
   if (reviseCard) {
@@ -506,6 +668,17 @@ function applyReplacement(text: string): void {
   }
   pendingSelection = null;
   hideAll();
+}
+
+/** Like {@link applyReplacement}, but KEEPS the original selected text and adds the
+ *  revision as a new paragraph BELOW it instead of replacing it. Reconstructs
+ *  "original + blank line + revision" and replaces the selection with that, so it
+ *  works the same in both Markdown and WYSIWYG modes (multi-paragraph options already
+ *  round-trip through replaceSelection). `pendingReviseText` is the exact text the
+ *  revision was generated from. */
+function applyInsertBelow(text: string): void {
+  const original = pendingReviseText.replace(/\s+$/, ''); // drop trailing WS so we don't stack blank lines
+  applyReplacement(original ? `${original}\n\n${text}` : text);
 }
 
 /** Positions a popup card just below the word/passage (or above if it'd overflow). */
@@ -766,9 +939,16 @@ function showRevise(options: string[]): void {
   options.forEach((opt, i) => {
     const row = el('div', 'prv-opt c' + (i % 3));
     row.appendChild(el('div', 'prv-text', opt));
+    const btns = el('div', 'prv-btns');
     const accept = el('button', 'prv-accept', 'Accept');
+    accept.title = 'Replace your original text with this revision';
     accept.addEventListener('click', () => applyReplacement(opt));
-    row.appendChild(accept);
+    const insert = el('button', 'prv-insert', 'Insert Below');
+    insert.title = 'Keep your original text and add this revision as a new paragraph below it';
+    insert.addEventListener('click', () => applyInsertBelow(opt));
+    btns.appendChild(accept);
+    btns.appendChild(insert);
+    row.appendChild(btns);
     card.appendChild(row);
   });
 
@@ -794,16 +974,39 @@ window.addEventListener('blur', hideMenu);
 function initEditor(fullText: string): void {
   const { fm, body } = splitFrontmatter(fullText);
   frontmatter = fm;
-  editor = new Editor({
+  const opts = {
     el: $('editor'),
     initialEditType: 'wysiwyg',
     previewStyle: 'vertical',
-    initialValue: body,
+    initialValue: blockifyComments(body),
     usageStatistics: false,
     hideModeSwitch: true,
     toolbarItems: [],
     height: '100%'
-  });
+  };
+  try {
+    editor = new Editor(opts);
+    // Toast UI can silently convert problematic content to an empty document —
+    // treat that like a thrown error so we don't leave the page blank.
+    if (body.trim() && !editor.getMarkdown().trim()) {
+      throw new Error('empty wysiwyg conversion');
+    }
+  } catch {
+    // Last resort: the Markdown source editor never breaks on content, so the
+    // chapter stays fully editable instead of blank.
+    try {
+      editor?.destroy?.();
+    } catch {
+      /* ignore */
+    }
+    const host = $('editor');
+    if (host) {
+      host.innerHTML = '';
+    }
+    editor = new Editor({ ...opts, initialEditType: 'markdown', initialValue: body });
+    currentMode = 'markdown';
+    syncModeButtons(); // keep the toolbar toggle honest about the fallback
+  }
   lastSent = currentMarkdown();
 
   // Mark genuine user edits; arrow keys / focus / programmatic changes don't
@@ -811,7 +1014,15 @@ function initEditor(fullText: string): void {
   const editorEl = $('editor');
   if (editorEl) {
     editorEl.addEventListener('input', () => (userTyping = true), true);
+    editorEl.addEventListener('input', autoEmDash, true); // "--" → "—" (third dash reverts)
     editorEl.addEventListener('paste', () => (userTyping = true), true);
+    // Live "N words selected" footer. selectionchange covers the WYSIWYG
+    // (contenteditable) selection; mouseup/keyup also cover the Markdown
+    // (CodeMirror) editor, where document selectionchange doesn't always fire.
+    document.addEventListener('selectionchange', scheduleSelectionStats);
+    editorEl.addEventListener('mouseup', scheduleSelectionStats, true);
+    editorEl.addEventListener('keyup', scheduleSelectionStats, true);
+    editorEl.addEventListener('blur', updateSelectionStats, true);
     // Right-click on a selection → Proser menu; no selection → native menu.
     editorEl.addEventListener(
       'contextmenu',
@@ -855,6 +1066,125 @@ function initEditor(fullText: string): void {
             }
             pendingRect = range.getBoundingClientRect();
             showSpellCard(word, spellSuggestions.get(word) ?? []);
+            return;
+          }
+        }
+
+        // Grammar next: right-click on a flagged phrase → its reason + one-click fix.
+        if (spellcheckOn && grammarRanges.length > 0) {
+          const hit = grammarHitAtPoint(e.clientX, e.clientY);
+          if (hit) {
+            e.preventDefault();
+            hideMenu();
+            const ds = window.getSelection();
+            if (ds) {
+              ds.removeAllRanges();
+              ds.addRange(hit.range); // select the phrase so the fix replaces exactly it
+            }
+            pendingSelText = hit.finding.phrase;
+            try {
+              pendingSelection = editor.getSelection();
+            } catch {
+              pendingSelection = null;
+            }
+            pendingRect = hit.range.getBoundingClientRect();
+            showGrammarCard(hit.finding);
+            return;
+          }
+        }
+
+        // Passive voice: right-click a flagged sentence → its reason + a one-click
+        // active-voice rewrite. The underline now spans the whole sentence (the AI pass
+        // judges sentences), so selecting its range replaces exactly it.
+        if (passiveOn && passiveRanges.length > 0) {
+          const hit = passiveHitAtPoint(e.clientX, e.clientY);
+          if (hit) {
+            e.preventDefault();
+            hideMenu();
+            const ds = window.getSelection();
+            if (ds) {
+              ds.removeAllRanges();
+              ds.addRange(hit.range); // select the sentence so the rewrite replaces it
+            }
+            pendingSelText = hit.finding.phrase;
+            try {
+              pendingSelection = editor.getSelection();
+            } catch {
+              pendingSelection = null;
+            }
+            pendingRect = hit.range.getBoundingClientRect();
+            showPassiveCard(hit.finding);
+            return;
+          }
+        }
+
+        // Tense: right-click a flagged sentence → its reason + one-click corrected rewrite.
+        if (tenseOn && tenseRanges.length > 0) {
+          const hit = tenseHitAtPoint(e.clientX, e.clientY);
+          if (hit) {
+            e.preventDefault();
+            hideMenu();
+            const ds = window.getSelection();
+            if (ds) {
+              ds.removeAllRanges();
+              ds.addRange(hit.range); // select the sentence so the fix replaces exactly it
+            }
+            pendingSelText = hit.finding.phrase;
+            try {
+              pendingSelection = editor.getSelection();
+            } catch {
+              pendingSelection = null;
+            }
+            pendingRect = hit.range.getBoundingClientRect();
+            showTenseCard(hit.finding);
+            return;
+          }
+        }
+
+        // Quotation punctuation: right-click the flagged quote + period/comma → the
+        // style rule + a one-click swap. Deterministic, so it's always available when on.
+        if (quotePunctuationStyle !== 'off') {
+          const hit = quotePunctHitAtPoint(e.clientX, e.clientY);
+          if (hit) {
+            e.preventDefault();
+            hideMenu();
+            const ds = window.getSelection();
+            if (ds) {
+              ds.removeAllRanges();
+              ds.addRange(hit.range); // select the pair so the fix replaces exactly it
+            }
+            pendingSelText = hit.range.toString();
+            try {
+              pendingSelection = editor.getSelection();
+            } catch {
+              pendingSelection = null;
+            }
+            pendingRect = hit.range.getBoundingClientRect();
+            showInlineFixCard(hit);
+            return;
+          }
+        }
+
+        // Sentence spacing: right-click the flagged gap (or the period when a space is
+        // missing) → the rule + a one-click normalize to the configured spacing.
+        {
+          const hit = spacingHitAtPoint(e.clientX, e.clientY);
+          if (hit) {
+            e.preventDefault();
+            hideMenu();
+            const ds = window.getSelection();
+            if (ds) {
+              ds.removeAllRanges();
+              ds.addRange(hit.range); // select the gap/punctuation so the fix replaces it
+            }
+            pendingSelText = hit.range.toString();
+            try {
+              pendingSelection = editor.getSelection();
+            } catch {
+              pendingSelection = null;
+            }
+            pendingRect = hit.range.getBoundingClientRect();
+            showInlineFixCard(hit);
             return;
           }
         }
@@ -920,27 +1250,65 @@ function initEditor(fullText: string): void {
 
   applySpellcheck(spellcheckOn); // ProseMirror nodes exist now — set the attribute
 
+  // The document is now rendered and visible. Tell the host it can START its checks
+  // (spell / grammar / tense) — nothing runs before this, so opening a file never
+  // waits behind a check, and large chapters display immediately.
+  displayed = true;
+  vscode.postMessage({ type: 'displayed' });
+  scheduleRepaintSpell(); // first squiggle paint, now that the doc is shown
+
   setTimeout(() => {
     initializing = false;
   }, 400);
 }
 
-window.addEventListener('message', (event: MessageEvent) => {
-  const msg = event.data;
-  if (!msg) {
-    return;
-  }
-  if (msg.type === 'update') {
+onHostMessage<HostToWebviewType>({
+  update: (msg) => {
     const fullText: string = msg.text ?? '';
     if (!editor) {
       initEditor(fullText);
     } else if (fullText !== currentMarkdown()) {
       const { fm, body } = splitFrontmatter(fullText);
+      // setMarkdown rebuilds the document and resets cursor + scroll (so undo/redo,
+      // which re-pushes the whole text, jumped to the end). Capture where we are and
+      // restore it after Toast UI re-renders — same pattern as setMode().
+      const before = scrollableEditorEl();
+      const ratio =
+        before && before.scrollHeight > before.clientHeight
+          ? before.scrollTop / (before.scrollHeight - before.clientHeight)
+          : 0;
+      let savedSel: unknown;
+      try {
+        savedSel = editor.getSelection?.();
+      } catch {
+        /* no selection to preserve */
+      }
       applyingRemote = true;
       frontmatter = fm;
-      editor.setMarkdown(body, false);
+      try {
+        editor.setMarkdown(blockifyComments(body), false);
+      } catch {
+        try {
+          editor.setMarkdown(body, false);
+        } catch {
+          /* keep prior content rather than blank the editor */
+        }
+      }
       lastSent = currentMarkdown();
       applyingRemote = false;
+      setTimeout(() => {
+        try {
+          if (Array.isArray(savedSel)) {
+            editor.setSelection?.(savedSel[0], savedSel[1]);
+          }
+        } catch {
+          /* stale position after a big change — fall back to default */
+        }
+        const after = scrollableEditorEl();
+        if (after && after.scrollHeight > after.clientHeight) {
+          after.scrollTop = ratio * (after.scrollHeight - after.clientHeight);
+        }
+      }, 0);
       scheduleRepaintSpell(); // content replaced — re-anchor squiggles
     }
     if (pendingReveal) {
@@ -948,9 +1316,11 @@ window.addEventListener('message', (event: MessageEvent) => {
       pendingReveal = '';
       setTimeout(() => revealText(t), 150); // let Toast finish rendering first
     }
-  } else if (msg.type === 'reveal') {
+  },
+  reveal: (msg) => {
     revealText(typeof msg.text === 'string' ? msg.text : '');
-  } else if (msg.type === 'insertHr') {
+  },
+  insertHr: (msg) => {
     if (editor) {
       userTyping = true;
       try {
@@ -960,7 +1330,8 @@ window.addEventListener('message', (event: MessageEvent) => {
       }
       scheduleRepaintSpell();
     }
-  } else if (msg.type === 'insertText') {
+  },
+  insertText: (msg) => {
     if (editor && typeof msg.text === 'string') {
       userTyping = true;
       try {
@@ -970,7 +1341,8 @@ window.addEventListener('message', (event: MessageEvent) => {
       }
       scheduleRepaintSpell();
     }
-  } else if (msg.type === 'replaceSelection') {
+  },
+  replaceSelection: (msg) => {
     if (editor && typeof msg.text === 'string') {
       userTyping = true; // a genuine edit — let it sync to the document
       try {
@@ -984,15 +1356,18 @@ window.addEventListener('message', (event: MessageEvent) => {
       }
       pendingSelection = null;
     }
-  } else if (msg.type === 'thesaurusResult') {
+  },
+  thesaurusResult: (msg) => {
     if (Array.isArray(msg.words) && msg.words.length > 0) {
       showSuggestions(msg.words, msg.word ?? pendingSelText, msg.source);
     }
-  } else if (msg.type === 'reviseResult') {
+  },
+  reviseResult: (msg) => {
     if (Array.isArray(msg.options) && msg.options.length > 0) {
       showRevise(msg.options);
     }
-  } else if (msg.type === 'promptsResult') {
+  },
+  promptsResult: (msg) => {
     savedPrompts = Array.isArray(msg.prompts) ? msg.prompts : [];
     if (reviseStage === 'prompt' && reviseCard) {
       const slots = reviseCard.querySelector('.prv-slots') as HTMLElement | null;
@@ -1000,18 +1375,50 @@ window.addEventListener('message', (event: MessageEvent) => {
         renderSlots(slots); // refresh chips in place, keep any typed text
       }
     }
-  } else if (msg.type === 'doQuickPdf') {
+  },
+  doQuickPdf: (msg) => {
     void exportPdf(); // "Quick PDF (current view)" chosen from the Export menu
-  } else if (msg.type === 'spellResult') {
+  },
+  spellResult: (msg) => {
     const words: Array<{ word: string; suggestions: string[] }> = Array.isArray(msg.words)
       ? msg.words
       : [];
     misspelledWords = new Set(words.map((w) => w.word));
     spellSuggestions = new Map(words.map((w) => [w.word, w.suggestions || []]));
+    grammarFindings = Array.isArray(msg.grammar) ? msg.grammar : [];
     paintMisspellings();
-  } else if (msg.type === 'stats') {
+    paintGrammar();
+  },
+  passiveResult: (msg) => {
+    // Drop anything the user already fixed/dismissed so a fresh pass can't re-mark it.
+    passiveFindings = (Array.isArray(msg.findings) ? msg.findings : []).filter(
+      (f: PassiveFinding) => f && f.phrase && !ignoredPassive.has(normText(f.phrase))
+    );
+    paintPassive();
+  },
+  tenseResult: (msg) => {
+    // Drop anything the user already fixed/dismissed so a fresh pass can't re-mark it.
+    tenseFindings = (Array.isArray(msg.findings) ? msg.findings : []).filter(
+      (f: TenseFinding) => f && f.phrase && !resolvedTense.has(normText(f.phrase))
+    );
+    paintTense();
+  },
+  spellAiResult: (msg) => {
+    appendSpellAiSuggestions(msg.word, Array.isArray(msg.words) ? msg.words : []);
+  },
+  stats: (msg) => {
     renderStats(msg.stats);
-  } else if (msg.type === 'config') {
+  },
+  aiStatus: (msg) => {
+    renderAiStatus(Array.isArray(msg.chips) ? msg.chips : []);
+  },
+  aiBusy: (msg) => {
+    setAiBusy(typeof msg.tag === 'string' ? msg.tag : '', !!msg.on);
+  },
+  aiModelState: (msg) => {
+    renderModelState({ status: String(msg.status ?? 'off'), vramGb: Number(msg.vramGb) || 0 });
+  },
+  config: (msg) => {
     if (msg.filename) {
       exportFilename = msg.filename;
     }
@@ -1024,8 +1431,21 @@ window.addEventListener('message', (event: MessageEvent) => {
     if (typeof msg.spellcheckEnabled === 'boolean') {
       applySpellcheck(msg.spellcheckEnabled);
     }
-    if (typeof msg.model === 'string') {
-      renderModel(msg.model);
+    if (typeof msg.sentenceSpacing === 'number') {
+      sentenceSpacing = msg.sentenceSpacing;
+      paintSpacing();
+    }
+    if (msg.quotePunctuationStyle === 'inside' || msg.quotePunctuationStyle === 'outside' || msg.quotePunctuationStyle === 'off') {
+      quotePunctuationStyle = msg.quotePunctuationStyle;
+      paintQuotePunct();
+    }
+    if (typeof msg.passiveVoice === 'boolean') {
+      passiveOn = msg.passiveVoice;
+      paintPassive();
+    }
+    if (typeof msg.tenseCheck === 'boolean') {
+      tenseOn = msg.tenseCheck;
+      paintTense();
     }
   }
 });
@@ -1214,6 +1634,14 @@ document.addEventListener(
       e.preventDefault();
       openFind();
     }
+    // Cmd/Ctrl+S = SAVE. Capture + stopPropagation so Toast UI's own Mod-s
+    // (strikethrough) never fires. Flush the current content with the save so a
+    // just-deleted chapter is actually persisted (not lost to the edit debounce).
+    if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S') && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: 'save', text: currentMarkdown() });
+    }
   },
   true
 );
@@ -1343,10 +1771,490 @@ function paintMisspellings(): void {
 /** Debounced repaint — keeps squiggles aligned while typing, before the host's
  *  next spellResult arrives. */
 function scheduleRepaintSpell(): void {
+  if (!displayed) {
+    return; // no check paints until the document is on screen
+  }
   if (spellRepaintTimer) {
     clearTimeout(spellRepaintTimer);
   }
-  spellRepaintTimer = setTimeout(paintMisspellings, 150);
+  spellRepaintTimer = setTimeout(() => {
+    paintMisspellings();
+    paintGrammar();
+    paintSpacing();
+    paintQuotePunct();
+    paintPassive();
+    paintTense();
+  }, 150);
+}
+
+// ---- Inline grammar squiggles (AI proofread; a SECOND highlight color) ----
+// Same CSS-Highlight approach as spelling, but a distinct color. Each finding is a
+// {phrase, message, fix}; we underline its first occurrence and offer the fix on
+// right-click. Detection comes from the host's AI proofread pass (debounced/cached).
+interface GrammarFinding {
+  phrase: string;
+  message: string;
+  fix: string;
+}
+let grammarFindings: GrammarFinding[] = [];
+let grammarRanges: Array<{ finding: GrammarFinding; range: Range }> = [];
+
+/** First-occurrence range for each grammar finding's phrase in the visible text
+ *  (single text node — covers the common case without crossing inline formatting). */
+function collectGrammarRanges(): Array<{ finding: GrammarFinding; range: Range }> {
+  const root = editorContentEl();
+  const out: Array<{ finding: GrammarFinding; range: Range }> = [];
+  if (!root || grammarFindings.length === 0) {
+    return out;
+  }
+  const remaining = new Set(grammarFindings.filter((g) => g.phrase));
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while (remaining.size && (node = walker.nextNode())) {
+    const text = node.nodeValue || '';
+    for (const finding of Array.from(remaining)) {
+      const idx = text.indexOf(finding.phrase);
+      if (idx >= 0) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + finding.phrase.length);
+        out.push({ finding, range });
+        remaining.delete(finding);
+      }
+    }
+  }
+  return out;
+}
+
+/** Paints (or clears) the grammar highlight over the current view. */
+function paintGrammar(): void {
+  if (!FIND_SUPPORTED) {
+    return;
+  }
+  const reg = (CSS as any).highlights as Map<string, unknown>;
+  reg.delete('proser-grammar');
+  grammarRanges = [];
+  if (!spellcheckOn || grammarFindings.length === 0) {
+    return;
+  }
+  grammarRanges = collectGrammarRanges();
+  if (grammarRanges.length) {
+    reg.set('proser-grammar', new (window as any).Highlight(...grammarRanges.map((g) => g.range)));
+  }
+}
+
+// ---- Sentence-spacing underline (logic-only; a THIRD highlight color, yellow) ----
+// Flags gaps after a sentence-ending period whose space count differs from the user's
+// setting (0 / 1 / 2). Purely string logic — no AI. We walk the visible text nodes the
+// same way as spelling: because a text node never spans a paragraph/line break, and the
+// gap regex never matches across a newline, sentence boundaries at the end of a line or
+// paragraph are naturally skipped (only same-line inter-sentence gaps are checked).
+let sentenceSpacing = 1; // expected spaces after a period (0 | 1 | 2)
+// Quotation-punctuation placement preference: 'inside' (American) | 'outside' (British) | 'off'.
+let quotePunctuationStyle: 'inside' | 'outside' | 'off' = 'inside';
+// punctuation + optional closing quote/bracket, the horizontal whitespace run (never a
+// newline), then the next sentence's opening char. Requiring an uppercase / opening-quote
+// start excludes decimals (3.14) and lowercase abbreviations (e.g. the); excluding newlines
+// excludes paragraph/line ends. The lookahead only allows *unambiguous* sentence starts —
+// uppercase, opening curly quotes, or "(" — NOT straight " or ', which double as closing
+// quotes and would self-match a sentence that ends in a straight-quoted clause (e.g. past.").
+const SPACING_RE = /([.!?])(['")\]’”]*)([^\S\r\n]*)(?=[A-Z“‘(])/gu;
+
+/** Ranges over every same-line inter-sentence gap whose spacing breaks the setting. */
+function collectSpacingRanges(): Range[] {
+  const root = editorContentEl();
+  const ranges: Range[] = [];
+  if (!root) {
+    return ranges;
+  }
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const text = node.nodeValue || '';
+    SPACING_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = SPACING_RE.exec(text))) {
+      const close = m[2];
+      const actual = m[3].length;
+      if (actual === sentenceSpacing) {
+        continue;
+      }
+      // Skip single-letter initials / acronyms ("U.S.", "J. R. R.") — the char before
+      // the period is a lone letter — to avoid false positives on abbreviations.
+      const before = text[m.index - 1];
+      const before2 = text[m.index - 2];
+      if (m[1] === '.' && before && /\p{L}/u.test(before) && (!before2 || !/\p{L}/u.test(before2))) {
+        continue;
+      }
+      const range = document.createRange();
+      if (actual > 0) {
+        // Underline the existing whitespace run (too many or too few spaces).
+        const gapStart = m.index + 1 + close.length;
+        range.setStart(node, gapStart);
+        range.setEnd(node, gapStart + actual);
+      } else {
+        // Missing space — nothing to underline, so mark the punctuation itself.
+        range.setStart(node, m.index);
+        range.setEnd(node, m.index + 1 + close.length);
+      }
+      ranges.push(range);
+    }
+  }
+  return ranges;
+}
+
+/** Paints (or clears) the sentence-spacing highlight over the current view. */
+function paintSpacing(): void {
+  if (!FIND_SUPPORTED) {
+    return;
+  }
+  const reg = (CSS as any).highlights as Map<string, unknown>;
+  reg.delete('proser-spacing');
+  const ranges = collectSpacingRanges();
+  if (ranges.length) {
+    reg.set('proser-spacing', new (window as any).Highlight(...ranges));
+  }
+}
+
+/** Human text for the configured sentence-spacing rule. */
+function spacingMessage(n: number): string {
+  if (n === 0) {
+    return 'No space belongs after the sentence here (your spacing setting).';
+  }
+  return n === 2
+    ? 'Two spaces belong after the sentence here (your spacing setting).'
+    : 'One space belongs after the sentence here (your spacing setting).';
+}
+
+/** Button label for the one-click spacing fix. */
+function spacingActionLabel(n: number): string {
+  if (n === 0) {
+    return 'Remove the space';
+  }
+  return n === 2 ? 'Use two spaces' : 'Use one space';
+}
+
+/** The sentence-spacing issue (and its DOM range) under a screen point, with the
+ *  deterministic fix = the gap normalized to the configured number of spaces.
+ *  collectSpacingRanges underlines EITHER the whitespace run (wrong count) or, when a
+ *  space is missing, the punctuation itself — so append spaces in that case and just
+ *  normalize the run otherwise. */
+function spacingHitAtPoint(
+  x: number,
+  y: number
+): { range: Range; fix: string; message: string; label: string } | null {
+  const spaces = ' '.repeat(sentenceSpacing);
+  for (const range of collectSpacingRanges()) {
+    if (!rangeHitsPoint(range, x, y)) {
+      continue;
+    }
+    const text = range.toString();
+    const fix = /\S/.test(text) ? text + spaces : spaces;
+    return {
+      range,
+      fix,
+      message: spacingMessage(sentenceSpacing),
+      label: spacingActionLabel(sentenceSpacing)
+    };
+  }
+  return null;
+}
+
+// ---- Quotation-punctuation placement underline (logic-only; a TEAL wavy underline) ----
+// Flags the placement of a period/comma relative to a closing DOUBLE quote that disagrees
+// with the user's regional preference. Only "." and "," differ by region — "?" and "!" follow
+// logical placement in both dialects, so they're never flagged. Single quotes are excluded
+// (they collide with apostrophes/possessives). The (?<=\p{L}) lookbehind requires a letter
+// right before the quote/punctuation so inches (6".), decimals (3.14"), ellipses (..."), and
+// possessives (the dogs'.) don't false-positive.
+const QUOTE_INSIDE_RE = /(?<=\p{L})([”"])([.,])/gu; // American: flag British placement (close-quote then . ,)
+const QUOTE_OUTSIDE_RE = /(?<=\p{L})([.,])([”"])/gu; // British: flag American placement (. , then close-quote)
+
+/** Ranges over each quote/punctuation pair placed against the non-preferred style. */
+function collectQuotePunctRanges(): Range[] {
+  const root = editorContentEl();
+  const ranges: Range[] = [];
+  if (!root || quotePunctuationStyle === 'off') {
+    return ranges;
+  }
+  const re = quotePunctuationStyle === 'outside' ? QUOTE_OUTSIDE_RE : QUOTE_INSIDE_RE;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const text = node.nodeValue || '';
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const range = document.createRange();
+      range.setStart(node, m.index);
+      range.setEnd(node, m.index + m[0].length);
+      ranges.push(range);
+    }
+  }
+  return ranges;
+}
+
+/** Paints (or clears) the quotation-punctuation highlight over the current view. */
+function paintQuotePunct(): void {
+  if (!FIND_SUPPORTED) {
+    return;
+  }
+  const reg = (CSS as any).highlights as Map<string, unknown>;
+  reg.delete('proser-quote');
+  if (quotePunctuationStyle === 'off') {
+    return;
+  }
+  const ranges = collectQuotePunctRanges();
+  if (ranges.length) {
+    reg.set('proser-quote', new (window as any).Highlight(...ranges));
+  }
+}
+
+/** True when (x, y) lands within any client rect of `range` (a few px of padding).
+ *  Geometric hit-testing — far more reliable than caretRangeFromPoint + isPointInRange
+ *  for the TINY spacing/quote highlights (a 2-char span or a single space), where the
+ *  caret snaps to a word boundary and the point test misses almost every time. */
+function rangeHitsPoint(range: Range, x: number, y: number): boolean {
+  const rects = range.getClientRects();
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (x >= r.left - 2 && x <= r.right + 2 && y >= r.top - 2 && y <= r.bottom + 2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The quotation-punctuation issue (and its DOM range) under a screen point. The fix
+ *  is deterministic — the flagged period/comma and closing quote swapped into the
+ *  configured style — so no model call is needed. */
+function quotePunctHitAtPoint(
+  x: number,
+  y: number
+): { range: Range; fix: string; message: string; label: string } | null {
+  if (quotePunctuationStyle === 'off') {
+    return null;
+  }
+  const outside = quotePunctuationStyle === 'outside';
+  for (const range of collectQuotePunctRanges()) {
+    if (!rangeHitsPoint(range, x, y)) {
+      continue;
+    }
+    const pair = range.toString();
+    if (pair.length !== 2) {
+      continue; // stale/detached range after an edit
+    }
+    return {
+      range,
+      fix: pair[1] + pair[0], // swap the quote and the period/comma
+      label: outside ? 'Move outside' : 'Move inside',
+      message: outside
+        ? 'Periods and commas go outside the closing quote (British style).'
+        : 'Periods and commas go inside the closing quote (American style).'
+    };
+  }
+  return null;
+}
+
+/** A small card for a deterministic inline fix (quotation punctuation, sentence
+ *  spacing): the rule as the title + a one-click button that applies the corrected
+ *  text to the selected range, plus Dismiss. */
+function showInlineFixCard(hit: { fix: string; message: string; label: string }): void {
+  hideSuggestions();
+  const card = el('div');
+  card.id = 'proser-suggest';
+  card.addEventListener('mousedown', (e) => e.preventDefault()); // keep the range selected
+  card.appendChild(el('div', 'psg-title', hit.message));
+  const opts = el('div', 'psg-options');
+  const fix = el('button', 'psg-opt c1', hit.label) as HTMLButtonElement;
+  fix.addEventListener('click', () => applyReplacement(hit.fix));
+  opts.appendChild(fix);
+  card.appendChild(opts);
+  const actions = el('div', 'psg-actions');
+  const dismiss = el('button', 'psg-link', 'Dismiss');
+  dismiss.title = 'Close this for now';
+  dismiss.addEventListener('click', hideSuggestions);
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  document.body.appendChild(card);
+  suggestCard = card;
+  positionCard(card, pendingRect);
+}
+
+// ---- Passive-voice underline (AI; a PURPLE wavy underline) ----
+// The host's throttled whole-doc passive pass JUDGES each passive sentence — flag only
+// when an active rewrite would genuinely improve it, lenient inside dialogue — and sends
+// the sentences to underline. We anchor each by first-occurrence string match, exactly
+// like the tense pass below (it replaced an instant regex that flagged every passive).
+interface PassiveFinding {
+  phrase: string;
+  message: string;
+  fix: string;
+}
+let passiveOn = true;
+let passiveFindings: PassiveFinding[] = [];
+let passiveRanges: Array<{ finding: PassiveFinding; range: Range }> = [];
+// Sentences the user has already fixed or dismissed this session — never re-underline
+// them, even if a later (or flaky) passive pass reports them again. Cleared on reopen.
+const ignoredPassive = new Set<string>();
+const normText = (s: string): string => s.trim().replace(/\s+/g, ' ').toLowerCase();
+
+function collectPassiveRanges(): Array<{ finding: PassiveFinding; range: Range }> {
+  const root = editorContentEl();
+  const out: Array<{ finding: PassiveFinding; range: Range }> = [];
+  if (!root || passiveFindings.length === 0) {
+    return out;
+  }
+  const remaining = new Set(
+    passiveFindings.filter((p) => p.phrase && !ignoredPassive.has(normText(p.phrase)))
+  );
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while (remaining.size && (node = walker.nextNode())) {
+    const text = node.nodeValue || '';
+    for (const f of Array.from(remaining)) {
+      const idx = text.indexOf(f.phrase);
+      if (idx >= 0) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + f.phrase.length);
+        out.push({ finding: f, range });
+        remaining.delete(f);
+      }
+    }
+  }
+  return out;
+}
+
+/** Paints (or clears) the passive-voice highlight + stores hits for right-click. */
+function paintPassive(): void {
+  if (!FIND_SUPPORTED) {
+    return;
+  }
+  const reg = (CSS as any).highlights as Map<string, unknown>;
+  reg.delete('proser-passive');
+  passiveRanges = [];
+  if (!passiveOn || passiveFindings.length === 0) {
+    return;
+  }
+  passiveRanges = collectPassiveRanges();
+  if (passiveRanges.length) {
+    reg.set('proser-passive', new (window as any).Highlight(...passiveRanges.map((p) => p.range)));
+  }
+}
+
+/** The passive finding whose underline contains a screen point, for right-click. */
+function passiveHitAtPoint(x: number, y: number): { finding: PassiveFinding; range: Range } | null {
+  const caret = (document as any).caretRangeFromPoint?.(x, y) as Range | undefined;
+  if (!caret) {
+    return null;
+  }
+  for (const p of passiveRanges) {
+    try {
+      if (p.range.isPointInRange(caret.startContainer, caret.startOffset)) {
+        return p;
+      }
+    } catch {
+      /* range detached after an edit — ignore until the next repaint */
+    }
+  }
+  return null;
+}
+
+// ---- Tense-inconsistency underline (AI; an ORANGE wavy underline) ----
+// The host's throttled whole-doc tense pass sends the deviating sentences; we
+// anchor each by first-occurrence string match, exactly like grammar findings.
+interface TenseFinding {
+  phrase: string;
+  message: string;
+  fix: string;
+}
+let tenseOn = true;
+let tenseFindings: TenseFinding[] = [];
+let tenseRanges: Array<{ finding: TenseFinding; range: Range }> = [];
+// Sentences the user has already fixed or dismissed this session — never re-underline
+// them, even if a later (or flaky) tense pass reports them again. Cleared on reopen.
+// (Uses the shared `normText` normalizer defined with the passive ignore-set.)
+const resolvedTense = new Set<string>();
+
+function collectTenseRanges(): Array<{ finding: TenseFinding; range: Range }> {
+  const root = editorContentEl();
+  const out: Array<{ finding: TenseFinding; range: Range }> = [];
+  if (!root || tenseFindings.length === 0) {
+    return out;
+  }
+  const remaining = new Set(
+    tenseFindings.filter((t) => t.phrase && !resolvedTense.has(normText(t.phrase)))
+  );
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while (remaining.size && (node = walker.nextNode())) {
+    const text = node.nodeValue || '';
+    for (const f of Array.from(remaining)) {
+      const idx = text.indexOf(f.phrase);
+      if (idx >= 0) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + f.phrase.length);
+        out.push({ finding: f, range });
+        remaining.delete(f);
+      }
+    }
+  }
+  return out;
+}
+
+/** Paints (or clears) the tense-inconsistency highlight + stores hits for right-click. */
+function paintTense(): void {
+  if (!FIND_SUPPORTED) {
+    return;
+  }
+  const reg = (CSS as any).highlights as Map<string, unknown>;
+  reg.delete('proser-tense');
+  tenseRanges = [];
+  if (!tenseOn || tenseFindings.length === 0) {
+    return;
+  }
+  tenseRanges = collectTenseRanges();
+  if (tenseRanges.length) {
+    reg.set('proser-tense', new (window as any).Highlight(...tenseRanges.map((t) => t.range)));
+  }
+}
+
+/** The tense finding whose underline contains a screen point, for right-click. */
+function tenseHitAtPoint(x: number, y: number): { finding: TenseFinding; range: Range } | null {
+  const caret = (document as any).caretRangeFromPoint?.(x, y) as Range | undefined;
+  if (!caret) {
+    return null;
+  }
+  for (const t of tenseRanges) {
+    try {
+      if (t.range.isPointInRange(caret.startContainer, caret.startOffset)) {
+        return t;
+      }
+    } catch {
+      /* range detached after an edit — ignore until the next repaint */
+    }
+  }
+  return null;
+}
+
+/** The grammar finding whose underline contains a screen point, for right-click. */
+function grammarHitAtPoint(x: number, y: number): { finding: GrammarFinding; range: Range } | null {
+  const caret = (document as any).caretRangeFromPoint?.(x, y) as Range | undefined;
+  if (!caret) {
+    return null;
+  }
+  for (const g of grammarRanges) {
+    try {
+      if (g.range.isPointInRange(caret.startContainer, caret.startOffset)) {
+        return g;
+      }
+    } catch {
+      /* range detached after an edit — ignore until the next repaint */
+    }
+  }
+  return null;
 }
 
 /** The word (and its DOM range) under a screen point, for right-click spelling. */
@@ -1375,9 +2283,17 @@ function wordRangeAtPoint(x: number, y: number): { word: string; range: Range } 
   return { word: text.slice(s, e), range };
 }
 
-/** Anchored card for a misspelled word: suggestions + Add to dictionary. */
+/** The word the spell card is currently showing, so a late-arriving AI result
+ *  only augments the card if it's still about that same word. */
+let spellCardWord = '';
+
+/** Anchored card for a misspelled word: suggestions + Add to dictionary. When a
+ *  tiny AI helper is configured, the host answers `spellAiResult` shortly after
+ *  and we append a labeled, dictionary-validated "AI" row (additive — the
+ *  dictionary's own suggestions stay first and authoritative). */
 function showSpellCard(word: string, suggestions: string[]): void {
   hideSuggestions();
+  spellCardWord = word;
   const card = el('div');
   card.id = 'proser-suggest';
   card.addEventListener('mousedown', (e) => e.preventDefault()); // keep the word selected
@@ -1395,18 +2311,205 @@ function showSpellCard(word: string, suggestions: string[]): void {
   }
   card.appendChild(opts);
 
+  // Ask the host for context-aware AI corrections (no-op unless a helper is set).
+  vscode.postMessage({ type: 'spellAiSuggest', word, sentence: sentenceContext() });
+
   const actions = el('div', 'psg-actions');
   const add = el('button', 'psg-link', '＋ Add to dictionary');
   add.addEventListener('click', () => {
     vscode.postMessage({ type: 'addToDictionary', word });
     hideSuggestions();
   });
+  // Ignore: stop flagging this word in THIS project only (not taught globally).
+  const ignore = el('button', 'psg-link', 'Ignore');
+  ignore.title = 'Stop flagging this word in this project (without adding it to your dictionary)';
+  ignore.addEventListener('click', () => {
+    vscode.postMessage({ type: 'ignoreWord', word });
+    hideSuggestions();
+  });
   const dismiss = el('button', 'psg-link', 'Dismiss');
+  dismiss.title = 'Close this for now';
   dismiss.addEventListener('click', hideSuggestions);
   actions.appendChild(add);
+  actions.appendChild(ignore);
   actions.appendChild(dismiss);
   card.appendChild(actions);
 
+  document.body.appendChild(card);
+  suggestCard = card;
+  positionCard(card, pendingRect);
+}
+
+/** Appends a labeled, dictionary-validated "AI" row to the open spell card — only
+ *  if the card is still about `word` and the suggestions aren't already shown. */
+function appendSpellAiSuggestions(word: string, words: string[]): void {
+  if (!suggestCard || word !== spellCardWord || words.length === 0) {
+    return;
+  }
+  if (suggestCard.querySelector('.psg-ai')) {
+    return; // already added for this card
+  }
+  const existing = new Set(
+    Array.from(suggestCard.querySelectorAll('.psg-opt')).map((b) =>
+      (b.textContent || '').toLowerCase()
+    )
+  );
+  const fresh = words.filter((w) => w && !existing.has(w.toLowerCase()));
+  if (fresh.length === 0) {
+    return; // AI added nothing the dictionary didn't already offer
+  }
+  const group = el('div', 'psg-ai');
+  const label = el('div', undefined, '✦ AI suggestions');
+  label.style.cssText = 'font-size:11px;opacity:0.7;margin:6px 0 4px;';
+  group.appendChild(label);
+  const row = el('div', 'psg-options');
+  fresh.slice(0, 6).forEach((w, i) => {
+    const b = el('button', 'psg-opt c' + (i % 3), w);
+    b.addEventListener('click', () => applyReplacement(w));
+    row.appendChild(b);
+  });
+  group.appendChild(row);
+  const actions = suggestCard.querySelector('.psg-actions');
+  suggestCard.insertBefore(group, actions); // between dictionary options and actions
+  positionCard(suggestCard, pendingRect); // height changed — keep it anchored
+}
+
+/** Anchored card for a grammar / word-choice error: the reason + a one-click fix
+ *  (replaces the flagged phrase with the AI's correction). */
+function showGrammarCard(finding: GrammarFinding): void {
+  hideSuggestions();
+  const card = el('div');
+  card.id = 'proser-suggest';
+  card.addEventListener('mousedown', (e) => e.preventDefault()); // keep the phrase selected
+  card.appendChild(el('div', 'psg-title', finding.message || 'Grammar suggestion'));
+  const opts = el('div', 'psg-options');
+  const fix = el('button', 'psg-opt c1', finding.fix) as HTMLButtonElement;
+  fix.title = `Replace “${finding.phrase}” with “${finding.fix}”`;
+  fix.addEventListener('click', () => applyReplacement(finding.fix));
+  opts.appendChild(fix);
+  card.appendChild(opts);
+  const actions = el('div', 'psg-actions');
+  // Ignore: permanently suppress this finding in this project so it stops nagging.
+  const ignore = el('button', 'psg-link', 'Ignore');
+  ignore.title = 'Stop flagging this phrase in this project';
+  ignore.addEventListener('click', () => {
+    vscode.postMessage({ type: 'ignoreGrammar', phrase: finding.phrase });
+    // Drop it locally too so the underline clears immediately.
+    grammarFindings = grammarFindings.filter((g) => g.phrase !== finding.phrase);
+    paintGrammar();
+    hideSuggestions();
+  });
+  const dismiss = el('button', 'psg-link', 'Dismiss');
+  dismiss.title = 'Close this for now';
+  dismiss.addEventListener('click', hideSuggestions);
+  actions.appendChild(ignore);
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  document.body.appendChild(card);
+  suggestCard = card;
+  positionCard(card, pendingRect);
+}
+
+const PASSIVE_INSTRUCTION = 'Rewrite this sentence in the active voice, keeping the same meaning and narrative tense.';
+
+/** Marks a passive finding handled: it's never re-underlined this session, and it
+ *  clears from the view right away. */
+function resolvePassive(finding: PassiveFinding): void {
+  ignoredPassive.add(normText(finding.phrase));
+  passiveFindings = passiveFindings.filter((f) => f.phrase !== finding.phrase);
+  paintPassive();
+}
+
+/** Card for a passive-voice underline: the reason + a one-click active-voice rewrite
+ *  (or an on-demand AI rewrite when the pass didn't supply one). */
+function showPassiveCard(finding: PassiveFinding): void {
+  hideSuggestions();
+  const card = el('div');
+  card.id = 'proser-suggest';
+  card.addEventListener('mousedown', (e) => e.preventDefault()); // keep the sentence selected
+  card.appendChild(el('div', 'psg-title', finding.message || 'Passive voice — consider active'));
+  const opts = el('div', 'psg-options');
+  // Findings always carry a real active rewrite (filtered host-side), so the one-click
+  // fix is the path. Guard the empty case with the Revise round-trip just in case.
+  if (finding.fix) {
+    const fix = el('button', 'psg-opt c1', finding.fix) as HTMLButtonElement;
+    fix.title = 'Replace with the active-voice rewrite';
+    fix.addEventListener('click', () => {
+      applyReplacement(finding.fix);
+      resolvePassive(finding); // clear it and never flag it again this session
+    });
+    opts.appendChild(fix);
+  } else {
+    const rewrite = el('button', 'psg-opt c1', 'Rewrite in active voice') as HTMLButtonElement;
+    rewrite.title = 'Ask the AI to rewrite this sentence in the active voice';
+    rewrite.addEventListener('click', () => {
+      pendingReviseText = finding.phrase; // revise targets the whole sentence (already selected)
+      resolvePassive(finding);
+      runRevise(PASSIVE_INSTRUCTION);
+    });
+    opts.appendChild(rewrite);
+  }
+  card.appendChild(opts);
+  const actions = el('div', 'psg-actions');
+  const ignore = el('button', 'psg-link', 'Ignore');
+  ignore.title = "Don't flag this sentence's passive voice again";
+  ignore.addEventListener('click', () => {
+    resolvePassive(finding); // an ignored sentence stays unflagged for the session
+    hideSuggestions();
+  });
+  actions.appendChild(ignore);
+  card.appendChild(actions);
+  document.body.appendChild(card);
+  suggestCard = card;
+  positionCard(card, pendingRect);
+}
+
+/** Card for a tense underline: the reason + a one-click corrected-tense rewrite
+ *  (or an on-demand AI rewrite when the pass didn't supply one). */
+/** Marks a tense finding handled: it's never re-underlined this session, and it
+ *  clears from the view right away. */
+function resolveTense(finding: TenseFinding): void {
+  resolvedTense.add(normText(finding.phrase));
+  tenseFindings = tenseFindings.filter((f) => f.phrase !== finding.phrase);
+  paintTense();
+}
+
+function showTenseCard(finding: TenseFinding): void {
+  hideSuggestions();
+  const card = el('div');
+  card.id = 'proser-suggest';
+  card.addEventListener('mousedown', (e) => e.preventDefault()); // keep the sentence selected
+  card.appendChild(el('div', 'psg-title', finding.message || 'Tense inconsistency'));
+  const opts = el('div', 'psg-options');
+  // Findings always carry a real, different correction now (filtered host-side), so
+  // the one-click fix is the path. Guard the empty case just in case.
+  if (finding.fix) {
+    const fix = el('button', 'psg-opt c1', finding.fix) as HTMLButtonElement;
+    fix.title = 'Replace with the corrected-tense sentence';
+    fix.addEventListener('click', () => {
+      applyReplacement(finding.fix);
+      resolveTense(finding); // clear it and never flag it again this session
+    });
+    opts.appendChild(fix);
+  } else {
+    const rewrite = el('button', 'psg-opt c1', 'Fix tense with AI') as HTMLButtonElement;
+    rewrite.addEventListener('click', () => {
+      pendingReviseText = finding.phrase;
+      resolveTense(finding);
+      runRevise('Rewrite this sentence to match the dominant narrative tense, keeping its meaning.');
+    });
+    opts.appendChild(rewrite);
+  }
+  card.appendChild(opts);
+  const actions = el('div', 'psg-actions');
+  const ignore = el('button', 'psg-link', 'Ignore');
+  ignore.title = "Don't flag this sentence again";
+  ignore.addEventListener('click', () => {
+    resolveTense(finding); // an ignored sentence stays unflagged for the session
+    hideSuggestions();
+  });
+  actions.appendChild(ignore);
+  card.appendChild(actions);
   document.body.appendChild(card);
   suggestCard = card;
   positionCard(card, pendingRect);
@@ -1417,7 +2520,6 @@ document.querySelectorAll('#modeToggle button').forEach((b) => {
   b.addEventListener('click', () => setMode((b as HTMLElement).dataset.mode as any));
 });
 $('spellToggle')?.addEventListener('click', toggleSpellcheck);
-$('model')?.addEventListener('click', () => vscode.postMessage({ type: 'selectModel' }));
 $('fontMinus')?.addEventListener('click', () => changeFont(-1));
 $('fontPlus')?.addEventListener('click', () => changeFont(1));
 $('issuesBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'showIssues' }));

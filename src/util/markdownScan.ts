@@ -101,6 +101,38 @@ export function getProseSpans(text: string, options: ScanOptions = {}): ProseSpa
   return spans;
 }
 
+/**
+ * Returns `text` with a leading YAML frontmatter block removed.
+ *
+ * A block is recognized only when the first line is exactly `---` AND a later
+ * line closes it with `---` (the same rule getProseSpans uses); an unmatched
+ * opener is left untouched so a stray divider can't swallow the document. A line
+ * of four-or-more dashes (a thematic break / table rule) is NOT a closer. The
+ * result is always a SUFFIX of `text`, so absolute offsets obtained by indexing
+ * into the ORIGINAL text stay valid.
+ */
+export function stripFrontmatter(text: string): string {
+  const lines = text.split('\n');
+  if (lines.length < 2 || !FRONTMATTER_DELIM_RE.test(lines[0])) {
+    return text;
+  }
+  let closeLine = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (FRONTMATTER_DELIM_RE.test(lines[i])) {
+      closeLine = i;
+      break;
+    }
+  }
+  if (closeLine === -1) {
+    return text; // opener with no closer → not frontmatter
+  }
+  let offset = 0;
+  for (let i = 0; i <= closeLine; i++) {
+    offset += lines[i].length + 1; // +1 for the '\n' that split() consumed
+  }
+  return text.slice(Math.min(offset, text.length));
+}
+
 /** Splits one prose line into spans, punching out inline code and URLs. */
 function addLineSpans(
   line: string,

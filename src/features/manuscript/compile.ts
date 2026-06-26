@@ -78,11 +78,24 @@ export function columnForOpenUri(uri: vscode.Uri): vscode.ViewColumn | undefined
   return undefined;
 }
 
-function excludeSet(): string[] {
+/** Combined reference-file exclusion (defaults + user config), lowercased. Used
+ *  to keep non-manuscript files (notes, bible, …) out of the compile AND out of
+ *  the Story Memory canon fold. */
+export function referenceExcludeSet(): string[] {
   const extra = vscode.workspace
     .getConfiguration(EXTENSION_ID)
     .get<string[]>('manuscript.exclude', []);
   return [...DEFAULT_EXCLUDE, ...extra].map((s) => s.toLowerCase());
+}
+
+/** True when `base` (a filename without extension) is a reference file to skip. */
+export function isReferenceBasename(base: string, exclude = referenceExcludeSet()): boolean {
+  const b = base.toLowerCase();
+  return exclude.some((ex) => b === ex || b.startsWith(ex));
+}
+
+function excludeSet(): string[] {
+  return referenceExcludeSet();
 }
 
 /** Prettifies a filename into a fallback chapter title:

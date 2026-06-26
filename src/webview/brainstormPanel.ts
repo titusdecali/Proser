@@ -2,6 +2,8 @@
  *  prompts, and streams assistant replies token-by-token. Talks to the host via
  *  postMessage; the host owns the conversation history + the AI call. */
 
+import { onHostMessage } from './messaging';
+
 interface VsCodeApi {
   postMessage(msg: unknown): void;
 }
@@ -89,13 +91,15 @@ for (const p of PRESETS) {
   presetsEl.appendChild(b);
 }
 
-// ── @chapter mentions ───────────────────────────────────────────────────────
-// Type `@` to autocomplete a manuscript chapter; selecting one inserts its
+// ── @file mentions ──────────────────────────────────────────────────────────
+// Type `@` to autocomplete any file in the workspace; selecting one inserts its
 // `@id` token, which the host expands into the model's context on send.
 const mentionMenu = $('mentions');
-let chapters: Array<{ id: string; title: string }> = [];
-let mFiltered: Array<{ id: string; title: string }> = [];
+let chapters: Array<{ id: string; title: string; path: string }> = [];
+let mFiltered: Array<{ id: string; title: string; path: string }> = [];
 let mIndex = 0;
+let mentionWasActive = false; // so we refresh the list once per fresh @, not per keystroke
+let chaptersFetching = false; // a needChapters request is in flight
 
 function hideMentions(): void {
   mentionMenu.hidden = true;
@@ -116,7 +120,7 @@ function renderMentions(): void {
   mentionMenu.innerHTML = '';
   const hdr = document.createElement('div');
   hdr.className = 'mhdr';
-  hdr.textContent = 'Reference a chapter';
+  hdr.textContent = 'Reference a file';
   mentionMenu.appendChild(hdr);
   mFiltered.forEach((c, i) => {
     const row = document.createElement('div');
@@ -125,10 +129,13 @@ function renderMentions(): void {
     at.className = 'mat';
     at.textContent = '@' + c.id;
     row.appendChild(at);
-    if (c.title && c.title.toLowerCase() !== c.id.toLowerCase()) {
+    // Show the workspace-relative path so same-named files in different folders
+    // are distinguishable; fall back to the prettified title.
+    const sub = c.path || c.title;
+    if (sub && sub.toLowerCase() !== c.id.toLowerCase()) {
       const t = document.createElement('span');
       t.className = 'mtitle';
-      t.textContent = c.title;
+      t.textContent = sub;
       row.appendChild(t);
     }
     // mousedown (not click) so the textarea doesn't blur before we insert.
@@ -140,19 +147,62 @@ function renderMentions(): void {
   });
 }
 
+/** Fuzzy subsequence score of `query` within `text` (case-insensitive). Returns
+ *  -1 when not all query chars appear in order. Rewards consecutive hits and
+ *  word/segment starts, so "obh" ranks "outline-back-half" near the top. */
+function fuzzy(query: string, text: string): number {
+  if (!query) {
+    return 0; // empty query matches everything (keeps the list visible after just "@")
+  }
+  const q = query.toLowerCase();
+  const t = text.toLowerCase();
+  let qi = 0;
+  let score = 0;
+  let run = 0;
+  let prev = -2;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      run = ti === prev + 1 ? run + 1 : 0;
+      let bonus = 1 + run;
+      const before = ti === 0 ? '' : t[ti - 1];
+      if (ti === 0 || before === '-' || before === '_' || before === '/' || before === '.' || before === ' ') {
+        bonus += 4; // start of a word/segment
+      }
+      score += bonus;
+      prev = ti;
+      qi++;
+    }
+  }
+  return qi === q.length ? score : -1;
+}
+
+/** Best fuzzy score across a file's id, title, and path. */
+function mentionScore(query: string, c: { id: string; title: string; path: string }): number {
+  return Math.max(fuzzy(query, c.id), fuzzy(query, c.title || ''), fuzzy(query, c.path || ''));
+}
+
 function updateMentions(): void {
   const am = activeMention();
   if (!am) {
+    mentionWasActive = false;
     hideMentions();
     return;
   }
-  if (!chapters.length) {
-    vscode.postMessage({ type: 'needChapters' }); // refresh the list lazily
+  // Refresh once when a fresh @ opens so newly created/renamed files show up
+  // without reopening the panel — but not on every keystroke within the same @.
+  // The host clears chaptersFetching when the new list arrives.
+  if (!mentionWasActive && !chaptersFetching) {
+    chaptersFetching = true;
+    vscode.postMessage({ type: 'needChapters' });
   }
-  const q = am.query.toLowerCase();
+  mentionWasActive = true;
+  const q = am.query;
   mFiltered = chapters
-    .filter((c) => c.id.toLowerCase().includes(q) || c.title.toLowerCase().includes(q))
-    .slice(0, 8);
+    .map((c) => ({ c, s: mentionScore(q, c) }))
+    .filter((x) => x.s >= 0)
+    .sort((a, b) => b.s - a.s) // best matches first
+    .slice(0, 8)
+    .map((x) => x.c);
   if (!mFiltered.length) {
     hideMentions();
     return;
@@ -214,6 +264,59 @@ input.addEventListener('keydown', (e) => {
   }
 });
 $('newchat').addEventListener('click', () => vscode.postMessage({ type: 'reset' }));
+
+// Header model dropdown — switch the editor / brainstorm model in place.
+$('modelSelect')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setModel', value: (e.target as HTMLSelectElement).value })
+);
+// Gear → Add / Remove Models picker.
+$('modelManage')?.addEventListener('click', () => vscode.postMessage({ type: 'manageModels' }));
+
+// Rescan popover — re-scan the manuscript into Story Memory (active page / all files).
+const rescanBtn = $('rescanbtn');
+const rescanMenu = $('rescanmenu');
+function closeRescan(): void {
+  rescanMenu.hidden = true;
+  rescanBtn.setAttribute('aria-expanded', 'false');
+}
+function renderRescan(): void {
+  rescanMenu.innerHTML = '';
+  const hd = document.createElement('div');
+  hd.className = 'histhd';
+  hd.textContent = 'Re-scan into Story Memory';
+  rescanMenu.appendChild(hd);
+  const items: Array<[string, string]> = [
+    ['Re-Scan Active Page', 'rescanActive'],
+    ['Re-Scan All Files', 'rescanAll']
+  ];
+  for (const [label, type] of items) {
+    const row = document.createElement('div');
+    row.className = 'histrow';
+    const b = document.createElement('button');
+    b.className = 'histitem';
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      closeRescan();
+      vscode.postMessage({ type });
+    });
+    row.appendChild(b);
+    rescanMenu.appendChild(row);
+  }
+}
+rescanBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const open = rescanMenu.hidden;
+  if (open) {
+    renderRescan();
+  }
+  rescanMenu.hidden = !open;
+  rescanBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+document.addEventListener('click', (e) => {
+  if (!rescanMenu.hidden && !(e.target as HTMLElement).closest('.rescanwrap')) {
+    closeRescan();
+  }
+});
 
 // History popover — a button that opens a list of past chats.
 const histBtn = $('histbtn');
@@ -287,6 +390,32 @@ function renderHistory(items: Array<{ id: string; title: string }>): void {
 }
 
 let model = '';
+let editorModels: Array<{ tag: string; label: string }> = [];
+
+/** Fills the header model dropdown with the system-fitting editor models (plus the
+ *  current one) and a Cloud option; selecting one switches the model. */
+function fillModelSelect(current: string): void {
+  const sel = $('modelSelect') as HTMLSelectElement | null;
+  if (!sel) {
+    return;
+  }
+  sel.textContent = '';
+  for (const m of editorModels) {
+    const o = document.createElement('option');
+    o.value = m.tag;
+    o.textContent = m.label;
+    sel.appendChild(o);
+  }
+  const cloud = document.createElement('option');
+  cloud.value = '__cloud__';
+  cloud.textContent = current === '__cloud__' ? `☁ ${model || 'Cloud'}` : '☁ Cloud (OpenRouter)…';
+  sel.appendChild(cloud);
+  sel.value =
+    current === '__cloud__' || editorModels.some((m) => m.tag === current)
+      ? current
+      : editorModels[0]?.tag ?? '';
+}
+
 /** Replaces the transcript with a saved conversation (or the empty state). */
 function renderConversation(messages: Array<{ role: string; content: string }>): void {
   log.innerHTML = '';
@@ -307,22 +436,25 @@ function renderConversation(messages: Array<{ role: string; content: string }>):
   log.scrollTop = log.scrollHeight;
 }
 
-window.addEventListener('message', (event: MessageEvent) => {
-  const msg = event.data || {};
-  if (msg.type === 'init') {
-    model = msg.model && msg.model !== 'off' ? msg.model : '';
-    $('model').textContent = model || 'no model set';
-  } else if (msg.type === 'history') {
+onHostMessage({
+  models: (msg) => {
+    editorModels = (msg.items || []) as Array<{ tag: string; label: string }>;
+    model = msg.currentName && msg.currentName !== 'off' ? msg.currentName : '';
+    fillModelSelect(msg.current || '');
+  },
+  history: (msg) => {
     currentId = msg.currentId || '';
     renderHistory(msg.items || []);
-  } else if (msg.type === 'chapters') {
+  },
+  chapters: (msg) => {
     chapters = msg.items || [];
+    chaptersFetching = false; // request fulfilled
     if (activeMention()) {
       updateMentions(); // a list arrived while the user was typing @
     }
-  } else if (msg.type === 'load') {
-    renderConversation(msg.messages || []);
-  } else if (msg.type === 'context') {
+  },
+  load: (msg) => renderConversation(msg.messages || []),
+  context: (msg) => {
     const used = msg.used || 0;
     const max = msg.max || 0;
     const pct = max ? Math.round((used / max) * 100) : 0;
@@ -334,7 +466,8 @@ window.addEventListener('message', (event: MessageEvent) => {
     } else {
       warn.hidden = true;
     }
-  } else if (msg.type === 'token') {
+  },
+  token: (msg) => {
     if (!current) {
       current = addBubble('ai caret', '');
     }
@@ -342,12 +475,14 @@ window.addEventListener('message', (event: MessageEvent) => {
     current.classList.add('caret'); // keep caret while streaming
     current.textContent += msg.text;
     log.scrollTop = log.scrollHeight;
-  } else if (msg.type === 'done') {
+  },
+  done: () => {
     if (current) {
       current.classList.remove('caret');
     }
     current = null;
-  } else if (msg.type === 'error') {
+  },
+  error: (msg) => {
     if (current) {
       current.classList.remove('caret');
       current.classList.add('error');
@@ -358,8 +493,14 @@ window.addEventListener('message', (event: MessageEvent) => {
       addBubble('ai error', '⚠ ' + msg.message);
     }
     current = null;
-  } else if (msg.type === 'busy') {
-    setBusy(!!msg.on);
+  },
+  busy: (msg) => setBusy(!!msg.on),
+  rescanDone: (msg) => {
+    if (msg.ok) {
+      addBubble('ai', '✓ Story Memory re-scanned.');
+    } else if (msg.error) {
+      addBubble('ai error', '⚠ ' + msg.error);
+    }
   }
 });
 

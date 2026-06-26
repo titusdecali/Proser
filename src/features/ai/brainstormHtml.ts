@@ -29,7 +29,16 @@ export function getBrainstormHtml(webview: vscode.Webview, extensionUri: vscode.
   header { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     border-bottom: 1px solid var(--vscode-panel-border); }
   header .title { font-weight: 600; }
-  header .model { font-size: 11px; color: var(--vscode-descriptionForeground); }
+  header .model-select { font: inherit; font-size: 11px; color: var(--vscode-descriptionForeground);
+    background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; cursor: pointer;
+    max-width: 180px; }
+  header .model-select:hover { border-color: var(--vscode-panel-border); color: var(--vscode-foreground); }
+  header .model-select:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+  .gear-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+    cursor: pointer; color: var(--vscode-descriptionForeground); background: transparent;
+    border: 1px solid transparent; border-radius: 6px; transition: color 0.12s, border-color 0.12s, background 0.12s; }
+  .gear-btn:hover { color: var(--vscode-foreground); border-color: var(--vscode-focusBorder); background: var(--vscode-toolbar-hoverBackground); }
+  .gear-btn svg { width: 14px; height: 14px; display: block; }
   header .spacer { flex: 1; }
   header button { font: inherit; font-size: 12px; cursor: pointer; color: var(--vscode-foreground);
     background: transparent; border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 3px 10px; }
@@ -49,8 +58,10 @@ export function getBrainstormHtml(webview: vscode.Webview, extensionUri: vscode.
   .caret::after { content: '▋'; opacity: 0.5; animation: blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
 
-  /* History — a button that opens a popover list of past chats. */
-  .histwrap { position: relative; }
+  /* History / Rescan — a button that opens a popover menu. */
+  .histwrap, .rescanwrap { position: relative; }
+  #rescanbtn { display: inline-flex; align-items: center; gap: 6px; }
+  #rescanbtn .chev { font-size: 9px; opacity: 0.7; }
   #histbtn { display: inline-flex; align-items: center; gap: 6px; }
   #histbtn .chev { font-size: 9px; opacity: 0.7; }
   .histmenu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30;
@@ -122,8 +133,17 @@ export function getBrainstormHtml(webview: vscode.Webview, extensionUri: vscode.
 <body>
   <header>
     <span class="title">Brainstorm</span>
-    <span class="model" id="model"></span>
+    <select id="modelSelect" class="model-select" title="Brainstorm / editor model — click to switch"></select>
+    <button id="modelManage" class="gear-btn" title="Add / Remove Models" aria-label="Add or remove models">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
     <span class="spacer"></span>
+    <div class="rescanwrap">
+      <button id="rescanbtn" title="Re-scan your manuscript into Story Memory" aria-haspopup="true" aria-expanded="false">
+        Rescan <span class="chev">▾</span>
+      </button>
+      <div id="rescanmenu" class="histmenu" hidden></div>
+    </div>
     <div class="histwrap">
       <button id="histbtn" title="Past chats" aria-haspopup="true" aria-expanded="false">
         History <span class="chev">▾</span>
@@ -135,7 +155,7 @@ export function getBrainstormHtml(webview: vscode.Webview, extensionUri: vscode.
 
   <div id="log">
     <div class="empty" id="empty">
-      Chat with your local model for ideas — names, plots, conflicts, scene starters and more.<br>
+      Chat with your local model for ideas: names, plots, conflicts, scene starters, etc.<br>
       Tap a prompt below to start, fill in the blanks, and hit Send.
     </div>
   </div>
@@ -145,10 +165,10 @@ export function getBrainstormHtml(webview: vscode.Webview, extensionUri: vscode.
     <div class="presets" id="presets"></div>
     <div class="composer">
       <div id="mentions" class="mentions" hidden></div>
-      <textarea id="input" rows="1" placeholder="Ask for ideas…  (type @ to reference a chapter · Enter to send)"></textarea>
+      <textarea id="input" rows="1" placeholder="Ask for ideas…  (type @ to reference a file · Enter to send)"></textarea>
       <button id="send">Send</button>
     </div>
-    <div class="hint">Type <b>@</b> to add a chapter to the model's context. Ideas are starting points.<span id="ctx"></span></div>
+    <div class="hint">Type <b>@</b> to add a file to the model's context. Ideas are starting points.<span id="ctx"></span></div>
   </footer>
 
   <script nonce="${nonce}" src="${scriptUri}"></script>

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ConfigKeys, EXTENSION_ID, STATE_SPELL_IGNORED } from '../../constants';
+import { ConfigKeys, EXTENSION_ID, STATE_SPELL_IGNORED, STATE_GRAMMAR_IGNORED } from '../../constants';
 import { getProseTokens } from '../../util/wordcount';
 import { ScanOptions } from '../../util/markdownScan';
 import { UserDictionary } from './userDictionary';
@@ -23,6 +23,7 @@ export interface Misspelling {
 export class SpellService {
   private readonly userDict: UserDictionary;
   private readonly ignored: Set<string>;
+  private readonly ignoredGrammar: Set<string>;
   private engine?: SpellEngine;
   private language: string;
   private loading?: Promise<SpellEngine | undefined>;
@@ -36,6 +37,9 @@ export class SpellService {
     this.userDict = new UserDictionary(context);
     this.ignored = new Set(
       context.workspaceState.get<string[]>(STATE_SPELL_IGNORED, []).map((w) => w.toLowerCase())
+    );
+    this.ignoredGrammar = new Set(
+      context.workspaceState.get<string[]>(STATE_GRAMMAR_IGNORED, []).map((p) => p.toLowerCase())
     );
     this.language = this.configuredLanguage();
     context.subscriptions.push(
@@ -154,6 +158,14 @@ export class SpellService {
     return out;
   }
 
+  /** True if the active dictionary accepts `word` (engine unavailable → true, so
+   *  callers never over-reject). Used to validate AI-proposed spelling
+   *  corrections — keep only the ones that are genuinely real words. */
+  async isWordCorrect(word: string): Promise<boolean> {
+    const eng = await this.ensureEngine();
+    return !eng || !eng.ready ? true : eng.isCorrect(word);
+  }
+
   /** Adds a word to the personal dictionary and live engine, then notifies. */
   async add(word: string): Promise<void> {
     if (!word) {
@@ -175,6 +187,24 @@ export class SpellService {
     this.ignored.add(key);
     await this.context.workspaceState.update(STATE_SPELL_IGNORED, [...this.ignored]);
     this.changeEmitter.fire();
+  }
+
+  /** Whether a grammar/word-choice finding (keyed by its flagged phrase) has been
+   *  ignored in this workspace. */
+  isGrammarIgnored(phrase: string): boolean {
+    return this.ignoredGrammar.has((phrase || '').trim().toLowerCase());
+  }
+
+  /** Permanently suppresses a grammar/word-choice finding by its phrase (persisted
+   *  per workspace). Does NOT fire onDidChange — the caller re-posts directly to
+   *  avoid a full AI re-scan. */
+  async ignoreGrammar(phrase: string): Promise<void> {
+    const key = (phrase || '').trim().toLowerCase();
+    if (!key || this.ignoredGrammar.has(key)) {
+      return;
+    }
+    this.ignoredGrammar.add(key);
+    await this.context.workspaceState.update(STATE_GRAMMAR_IGNORED, [...this.ignoredGrammar]);
   }
 }
 

@@ -1,5 +1,6 @@
 import { AiClient } from './AiClient';
 import { ThesaurusKind } from '../thesaurus/datamuseClient';
+import { AI_CONTEXT_TOKENS } from '../../constants';
 
 /**
  * Context-aware synonyms/antonyms via the configured AI engine: the model sees
@@ -33,7 +34,11 @@ export async function aiContextSuggestions(
       { role: 'user', content: user }
     ],
     () => {},
-    signal
+    signal,
+    // gemma4 is a thinking model — without think:false it reasons first and stalls
+    // a quick inline lookup. A short comma-list reply needs no big budget. numCtx is
+    // the shared size so this never reloads the model away from spell/etc.
+    { think: false, numPredict: 256, numCtx: AI_CONTEXT_TOKENS }
   );
 
   const lower = word.toLowerCase();

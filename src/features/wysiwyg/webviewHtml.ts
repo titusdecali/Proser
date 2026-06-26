@@ -100,11 +100,38 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       border-top: 1px solid var(--proser-edge);
       background: var(--vscode-editor-background); color: var(--vscode-descriptionForeground);
     }
-    /* Stats (left) + model selector (right) span the full frame width, sitting at
-       its far edges — not aligned to the text column. */
-    #footer #footerInner { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
-    #footer #model { cursor: pointer; white-space: nowrap; }
-    #footer #model:hover { color: var(--vscode-foreground); text-decoration: underline; }
+    /* Stats sit at the frame's left edge — not aligned to the text column. */
+    #footer #footerInner { display: flex; align-items: center; gap: 12px; width: 100%; }
+    /* Live "N words selected" beside the stats — blue, only while a selection exists. */
+    #selStats { color: var(--vscode-charts-blue, #539bf5); }
+    #selStats:empty { display: none; }
+
+    /* AI status sits at the frame's RIGHT edge, opposite the stats: a text load
+       state ("Loading Model…" / "Model Ready"), the model's VRAM use, then the
+       model chip(s) with a spinner while one is processing. */
+    #aiInfo { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+    #aiState:empty, #aiVram:empty { display: none; }
+    #aiState.st-ready { color: var(--vscode-charts-green, #3fb950); }
+    #aiState.st-loading { color: var(--vscode-charts-blue, #539bf5); }
+    #aiVram { opacity: 0.8; font-variant-numeric: tabular-nums; }
+    #aiStatus { display: flex; align-items: center; gap: 14px; }
+    #aiStatus:empty { display: none; }
+    .aichip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; opacity: 0.7; }
+    .aichip .dot {
+      width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+      background: var(--vscode-descriptionForeground);
+    }
+    .aichip.kind-ai .dot { background: var(--vscode-charts-green, #3fb950); } /* configured AI model */
+    .aichip.kind-dictionary { opacity: 0.5; }
+    /* Actively processing right now → the dot becomes a spinning ring. */
+    .aichip.busy { opacity: 1; }
+    .aichip.busy .dot {
+      width: 11px; height: 11px; background: transparent;
+      border: 2px solid var(--vscode-charts-blue, #539bf5);
+      border-top-color: transparent;
+      animation: aispin 0.7s linear infinite;
+    }
+    @keyframes aispin { to { transform: rotate(360deg); } }
 
     /* Match the VS Code theme instead of Toast UI's light palette. */
     .toastui-editor-defaultUI,
@@ -182,6 +209,9 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       display: inline-flex; align-items: center; justify-content: center;
       width: 32px; height: 28px; padding: 0; text-align: center; font-size: 13px;
     }
+    /* The leading "book" button looks up the selected word's definition. It sits in
+       the format row for compactness but is an action (data-act), not a format. */
+    #proser-ctx .fmt button.dict svg { width: 16px; height: 16px; display: block; }
     /* Action rows: a full-width label (Synonyms/Antonyms/Revise) plus a trailing
        config icon. The gear governs synonyms AND antonyms (one shared icon); the
        robot opens the AI model picker for Revise. */
@@ -257,12 +287,24 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     #proser-revise .prv-opt.c1 { border-left-color: var(--proser-opt-2); }
     #proser-revise .prv-opt.c2 { border-left-color: var(--proser-opt-3); }
     #proser-revise .prv-text { flex: 1 1 auto; max-height: 140px; overflow: auto; line-height: 1.4; white-space: pre-wrap; }
+    /* Per-option button stack: Accept (replace) on top, Insert Below (keep both) under it. */
+    #proser-revise .prv-btns { flex: 0 0 auto; align-self: center; display: flex; flex-direction: column; gap: 4px; }
     #proser-revise .prv-accept {
-      flex: 0 0 auto; align-self: center; border: none; cursor: pointer; font: inherit;
-      padding: 4px 12px; border-radius: 4px;
+      border: none; cursor: pointer; font: inherit;
+      padding: 4px 12px; border-radius: 4px; white-space: nowrap;
       color: var(--vscode-button-foreground); background: var(--vscode-button-background);
     }
     #proser-revise .prv-accept:hover { background: var(--vscode-button-hoverBackground); }
+    #proser-revise .prv-insert {
+      cursor: pointer; font: inherit; font-size: 11px;
+      padding: 3px 12px; border-radius: 4px; white-space: nowrap;
+      border: 1px solid var(--vscode-button-border, var(--vscode-contrastBorder, transparent));
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+      background: var(--vscode-button-secondaryBackground, transparent);
+    }
+    #proser-revise .prv-insert:hover {
+      background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+    }
 
     /* Prompt-input stage (under the selection): instruction + quick-slot chips. */
     #proser-revise .prv-input {
@@ -352,6 +394,38 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       text-decoration-skip-ink: none;
       background-color: rgba(241, 76, 76, 0.12);
     }
+    /* Grammar / word-choice errors (AI proofread) — a BLUE wavy underline so it
+       reads distinctly from the red spelling squiggle. */
+    ::highlight(proser-grammar) {
+      text-decoration: underline wavy var(--vscode-editorInfo-foreground, #3794ff);
+      text-decoration-skip-ink: none;
+      background-color: rgba(55, 148, 255, 0.12);
+    }
+    /* Sentence-spacing mismatches (logic-based) — a YELLOW wavy underline, distinct
+       from the red spelling and blue grammar squiggles. */
+    ::highlight(proser-spacing) {
+      text-decoration: underline wavy var(--vscode-editorWarning-foreground, #cca700);
+      text-decoration-skip-ink: none;
+      background-color: rgba(204, 167, 0, 0.16);
+    }
+    /* Quotation-punctuation placement mismatches (logic-based) — a TEAL wavy underline. */
+    ::highlight(proser-quote) {
+      text-decoration: underline wavy #4ec9b0;
+      text-decoration-skip-ink: none;
+      background-color: rgba(78, 201, 176, 0.16);
+    }
+    /* Passive-voice sentences (logic-based) — a PURPLE wavy underline. */
+    ::highlight(proser-passive) {
+      text-decoration: underline wavy #c586c0;
+      text-decoration-skip-ink: none;
+      background-color: rgba(197, 134, 192, 0.14);
+    }
+    /* Tense inconsistencies (AI) — an ORANGE wavy underline. */
+    ::highlight(proser-tense) {
+      text-decoration: underline wavy #ce9178;
+      text-decoration-skip-ink: none;
+      background-color: rgba(206, 145, 120, 0.16);
+    }
     /* A passage revealed from the sidebar checker's "Go" — flashed briefly. */
     ::highlight(proser-reveal) {
       background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234,179,8,0.45));
@@ -389,7 +463,12 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
   <div id="footer">
     <div id="footerInner">
       <span id="stats"></span>
-      <span id="model" title="Switch AI model"></span>
+      <span id="selStats"></span>
+      <span id="aiInfo">
+        <span id="aiState"></span>
+        <span id="aiVram"></span>
+        <span id="aiStatus"></span>
+      </span>
     </div>
   </div>
   <div id="proser-find">

@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
-import { AiClient } from '../ai/AiClient';
+import { AiClient, ChatOpts } from '../ai/AiClient';
+import { AI_CONTEXT_TOKENS } from '../../constants';
 import { SecretStore } from '../ai/secretStore';
-import { createEngine, prepareEngine } from '../ai/engineFactory';
+import { createFeatureEngine, prepareFeatureEngine } from '../ai/engineFactory';
 import { activeMarkdownDoc, manuscriptFolder, gatherChapterFiles } from '../manuscript/compile';
+import { PASSIVE_RE } from '../spellcheck/passiveRegex';
+import { stripFrontmatter } from '../../util/markdownScan';
 
 export type IssueType = 'passive' | 'tense' | 'continuity';
 export type Tense = 'past' | 'present';
@@ -36,17 +39,8 @@ interface Target {
   text: string;
 }
 
-/** Conservative passive heuristic for the no-AI fallback (mirrors qualityLinter). */
-const PASSIVE_RE =
-  /\b(was|were|is|are|been|being|be)\s+(\w+ed|written|done|made|taken|given|seen|known|shown|held|kept|told|found|built|sent|paid|lost|won|left|drawn|brought|bought|caught)\b/giu;
-
-/** Strips a leading YAML frontmatter block (kept out of the AI prompt). The body
- *  is a suffix of the full text, so `indexOf` against the full text still yields
- *  correct absolute offsets. */
-function bodyOf(text: string): string {
-  const m = /^(---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?)/.exec(text);
-  return m ? text.slice(m[1].length) : text;
-}
+// The conservative passive heuristic for the no-AI fallback (`scanLocal`) lives in
+// ../spellcheck/passiveRegex (PASSIVE_RE), shared with the AI passive pass.
 
 function basename(uri: vscode.Uri): string {
   return uri.path.split('/').pop() ?? 'document.md';
@@ -98,10 +92,17 @@ function scanPrompt(target: Tense | 'auto', body: string): { system: string; use
       : `The intended narrative tense is ${target.toUpperCase()}. Flag sentences that deviate from it.`;
   return {
     system:
-      'You are a meticulous prose copy-editor. You find (1) passive-voice sentences and ' +
-      '(2) tense-consistency problems. You respond with STRICT JSON only — no prose, no code fences.',
+      'You are a meticulous prose copy-editor. You find (1) passive-voice sentences that would be ' +
+      'genuinely improved by an active rewrite and (2) tense-consistency problems. You respond ' +
+      'with STRICT JSON only — no prose, no code fences.',
     user:
       `${tenseLine}\n\n` +
+      'For PASSIVE: do not flag passive voice mechanically. For each passive construction decide ' +
+      'whether an active rewrite would GENUINELY IMPROVE it, and flag ONLY those. KEEP passive when ' +
+      'the doer is unknown/unimportant/obvious, when the writer is emphasizing the RECIPIENT, when a ' +
+      'formal/ceremonial register is intended, or when the participle is really a predicate adjective ' +
+      'describing a STATE ("She was tired."). Be STRICTER in narration/description and LENIENT in ' +
+      'dialogue inside quotation marks. When genuinely unsure, leave it out.\n\n' +
       'Return JSON of exactly this shape:\n' +
       '{"detectedTense":"past|present|mixed","issues":[' +
       '{"type":"passive|tense","sentence":"<verbatim sentence copied EXACTLY from the text>",' +
@@ -135,14 +136,15 @@ async function runChat(
   system: string,
   user: string,
   title: string,
-  silent: boolean
+  silent: boolean,
+  opts?: ChatOpts
 ): Promise<string> {
   const messages = [
     { role: 'system' as const, content: system },
     { role: 'user' as const, content: user }
   ];
   if (silent) {
-    return (await client.chat(messages, () => {})).trim();
+    return (await client.chat(messages, () => {}, undefined, opts)).trim();
   }
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable: true },
@@ -156,12 +158,19 @@ async function runChat(
           chars += chunk.length;
           progress.report({ message: `${chars} characters…` });
         },
-        controller.signal
+        controller.signal,
+        opts
       );
       return full.trim();
     }
   );
 }
+
+/** Options for the structured checks (tense / passive / continuity): constrain to
+ *  JSON and disable the local thinking model's chain-of-thought — gemma4 otherwise
+ *  reasons into a separate field and returns empty `content`, so the scan finds
+ *  nothing. `numCtx` stops Ollama from silently truncating to its ~2k default. */
+const CHECK_OPTS: ChatOpts = { format: 'json', think: false, temperature: 0.2, numCtx: AI_CONTEXT_TOKENS };
 
 /** AI scan of one file → its issues + the model's detected tense. */
 async function scanOne(
@@ -171,8 +180,8 @@ async function scanOne(
   silent: boolean
 ): Promise<{ detectedTense: Tense | 'mixed' | null; issues: Issue[] }> {
   const file = basename(target.uri);
-  const { system, user } = scanPrompt(tense, bodyOf(target.text));
-  const text = await runChat(client, system, user, `Scanning ${file} for issues…`, silent);
+  const { system, user } = scanPrompt(tense, stripFrontmatter(target.text));
+  const text = await runChat(client, system, user, `Scanning ${file} for issues…`, silent, CHECK_OPTS);
   const { detectedTense, raw } = parseScan(text);
 
   const issues: Issue[] = [];
@@ -248,7 +257,7 @@ export async function scanIssues(
     return { detectedTense: null, issues: [], engineOff: false };
   }
 
-  const client = silent ? await createEngine(secrets) : await prepareEngine(secrets);
+  const client = silent ? await createFeatureEngine() : await prepareFeatureEngine(secrets);
   if (!client) {
     const issues = targets.flatMap(scanLocal);
     return { detectedTense: null, issues, engineOff: true };
@@ -278,19 +287,40 @@ function checkPrompt(kind: CheckKind, tense: Tense | 'auto', body: string): { sy
   if (kind === 'tense') {
     const t =
       tense === 'auto'
-        ? 'Infer the dominant narrative tense, then flag sentences that deviate from it.'
-        : `The intended narrative tense is ${tense.toUpperCase()}. Flag sentences that deviate from it.`;
+        ? 'Decide the DOMINANT narrative tense (past or present) from the MAJORITY of the narration ' +
+          'verbs (ignore dialogue inside quotes), then flag every narration sentence whose main verb ' +
+          'is in the OTHER tense.\n' +
+          'Example — if the narration is PAST: "She thumbed her ring" is fine, but "She likes going ' +
+          'there." is a slip → suggestion "She liked going there." When unsure, leave it out.'
+        : `The intended narrative tense is ${tense.toUpperCase()}. Flag every narration sentence whose ` +
+          'main verb is in a different tense (ignore dialogue inside quotes).';
     return {
-      system: 'You are a meticulous prose copy-editor focused on tense consistency. JSON only.',
+      system: 'You are a copy-editor checking NARRATIVE TENSE CONSISTENCY in fiction prose. JSON only.',
       user: `${t}\n\n${json}${body}`
     };
   }
   if (kind === 'passive') {
     return {
-      system: 'You are a meticulous prose copy-editor focused on passive voice. JSON only.',
+      system:
+        'You are a prose editor judging PASSIVE VOICE in fiction. You do not flag passive voice ' +
+        'mechanically — you decide, case by case, whether rewriting a passive sentence in ACTIVE ' +
+        'voice would genuinely make it stronger, and you flag ONLY those. Passive voice is often ' +
+        'the correct choice and must be left alone when it is. JSON only.',
       user:
-        'Flag passive-voice sentences (skip intentional dialogue/quotes). For each, suggest an ' +
-        `active-voice rewrite.\n\n${json}${body}`
+        'Find the passive-voice constructions below, then for EACH decide whether an active-voice ' +
+        'rewrite would GENUINELY IMPROVE the sentence. Include a sentence ONLY if active is clearly ' +
+        'better; when passive is fine, or you are genuinely unsure, leave it out.\n' +
+        'KEEP passive (do NOT flag) when ANY of these holds: the doer is unknown, unimportant, or ' +
+        'obvious; the writer is emphasizing the RECIPIENT of the action; a formal/ceremonial register ' +
+        'is intended; naming the doer would be clumsier or need a vague "someone"; or the participle ' +
+        'is really a predicate adjective describing a STATE ("She was tired.", "The door was locked.").\n' +
+        'FLAG passive when the doer is present and more vivid as the subject, or the passive is flat/' +
+        'wordy where active is tighter ("The ball was thrown by the boy." → "The boy threw the ball.").\n' +
+        'Weight by position: be STRICTER in NARRATION/description (outside quotation marks) and LENIENT ' +
+        'in DIALOGUE (inside quotation marks) — characters speak naturally; flag a dialogue line only if ' +
+        'it is markedly awkward.\n' +
+        'For each flagged sentence, "suggestion" is the active rewrite (it must differ and must not still ' +
+        `be passive) and "reason" is a short why.\n\n${json}${body}`
     };
   }
   // continuity
@@ -314,8 +344,8 @@ async function runCheckOne(
   silent: boolean
 ): Promise<{ detectedTense: Tense | 'mixed' | null; issues: Issue[] }> {
   const file = basename(target.uri);
-  const { system, user } = checkPrompt(kind, tense, bodyOf(target.text));
-  const text = await runChat(client, system, user, `Checking ${file} (${kind})…`, silent);
+  const { system, user } = checkPrompt(kind, tense, stripFrontmatter(target.text));
+  const text = await runChat(client, system, user, `Checking ${file} (${kind})…`, silent, CHECK_OPTS);
   const { detectedTense, raw } = parseScan(text);
 
   const issues: Issue[] = [];
@@ -358,7 +388,7 @@ export async function runCheck(
     return { detectedTense: null, issues: [], engineOff: false };
   }
 
-  const client = silent ? await createEngine(secrets) : await prepareEngine(secrets);
+  const client = silent ? await createFeatureEngine() : await prepareFeatureEngine(secrets);
   if (!client) {
     const issues = kind === 'passive' ? targets.flatMap(scanLocal) : [];
     return { detectedTense: null, issues, engineOff: true };
@@ -382,7 +412,7 @@ export async function rewriteIssue(
   issue: Issue,
   tense: Tense | 'auto'
 ): Promise<string | undefined> {
-  const client = await prepareEngine(secrets);
+  const client = await prepareFeatureEngine(secrets);
   if (!client) {
     return undefined;
   }
@@ -395,7 +425,13 @@ export async function rewriteIssue(
   const system =
     'You are a prose copy-editor. Return ONLY the corrected sentence — no preamble, no quotes, no code fences.';
   const user = `${goal}, preserving meaning and the author's voice.\n\n---\n${issue.sentence}`;
-  const text = await runChat(client, system, user, `${client.label}: fixing…`, false);
+  // Prose output (a corrected sentence) — disable thinking + set context, but NO
+  // JSON format constraint.
+  const text = await runChat(client, system, user, `${client.label}: fixing…`, false, {
+    think: false,
+    temperature: 0.4,
+    numCtx: AI_CONTEXT_TOKENS
+  });
   return text.trim() || undefined;
 }
 

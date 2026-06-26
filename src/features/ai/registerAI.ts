@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { Commands, ConfigKeys, EXTENSION_ID } from '../../constants';
 import { SecretStore } from './secretStore';
 import { reviseWithAI } from './reviseCommand';
-import { setupLocalEngine, EngineKind } from './engineFactory';
-import { pickOpenRouterModel } from './modelPicker';
+import { setupLocalEngine, enforceSingleLoadedModel, EngineKind } from './engineFactory';
+import { pickOpenRouterModelWithKey } from './modelPicker';
 
 /** Registers the AI commands. The thesaurus module wires its own optional
  *  AI-synonyms path; this owns key management, model selection, local setup,
@@ -38,7 +38,7 @@ export function registerAI(context: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand(Commands.aiSelectModel, async () => {
       const current = cfg().get<string>(ConfigKeys.aiOpenRouterModel, 'meta-llama/llama-4-scout');
-      const slug = await pickOpenRouterModel(current);
+      const slug = await pickOpenRouterModelWithKey(secrets, current);
       if (slug) {
         await cfg().update(ConfigKeys.aiOpenRouterModel, slug, vscode.ConfigurationTarget.Global);
         await ensureOpenRouterSelected();
@@ -47,6 +47,20 @@ export function registerAI(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand(Commands.aiSetupLocal, () => setupLocalEngine(secrets)),
-    vscode.commands.registerCommand(Commands.aiSelectLocalModel, () => setupLocalEngine(secrets))
+    vscode.commands.registerCommand(Commands.aiSelectLocalModel, () => setupLocalEngine(secrets)),
+
+    // Single-model invariant: keep ONLY the configured model resident in Ollama —
+    // on startup and whenever the model/engine changes — so a leftover model can't
+    // sit beside ours and run the machine out of memory.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.aiOllamaModel}`) ||
+        e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.aiEngine}`)
+      ) {
+        void enforceSingleLoadedModel();
+      }
+    })
   );
+
+  void enforceSingleLoadedModel(); // free any stray resident models at startup
 }

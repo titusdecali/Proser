@@ -2,8 +2,7 @@ import * as vscode from 'vscode';
 import { Commands, ConfigKeys, EXTENSION_ID, MARKDOWN_LANGUAGE_ID } from '../../constants';
 import { fetchFromDatamuse, ThesaurusKind } from './datamuseClient';
 import { fetchFromWordNet } from './offlineThesaurus';
-import { SecretStore } from '../ai/secretStore';
-import { createEngine, prepareEngine } from '../ai/engineFactory';
+import { getSynonymsEngine } from '../ai/engineFactory';
 import { aiContextSuggestions } from '../ai/aiSynonyms';
 import { currentModelName } from '../ai/aiModelStatus';
 
@@ -38,7 +37,6 @@ interface PendingSuggestions {
 let pending: PendingSuggestions | undefined;
 
 export function registerThesaurus(context: vscode.ExtensionContext): void {
-  const secrets = new SecretStore(context.secrets);
   output = vscode.window.createOutputChannel('Proser');
   context.subscriptions.push(output);
 
@@ -47,9 +45,9 @@ export function registerThesaurus(context: vscode.ExtensionContext): void {
   syncAiModeContext();
 
   context.subscriptions.push(
-    vscode.commands.registerCommand(Commands.synonyms, () => runThesaurus('synonyms', secrets)),
-    vscode.commands.registerCommand(Commands.antonyms, () => runThesaurus('antonyms', secrets)),
-    vscode.commands.registerCommand(Commands.useAiSynonyms, () => enableAi(secrets)),
+    vscode.commands.registerCommand(Commands.synonyms, () => runThesaurus('synonyms')),
+    vscode.commands.registerCommand(Commands.antonyms, () => runThesaurus('antonyms')),
+    vscode.commands.registerCommand(Commands.useAiSynonyms, () => enableAi()),
     vscode.commands.registerCommand(Commands.useLocalSynonyms, async () => {
       await setAiMode('local');
       vscode.window.setStatusBarMessage(
@@ -57,7 +55,7 @@ export function registerThesaurus(context: vscode.ExtensionContext): void {
         3000
       );
     }),
-    vscode.commands.registerCommand(Commands.thesaurusSelectEngine, () => selectEngine(secrets)),
+    vscode.commands.registerCommand(Commands.thesaurusSelectEngine, () => selectEngine()),
     vscode.languages.registerCompletionItemProvider(
       { language: MARKDOWN_LANGUAGE_ID },
       new ThesaurusCompletionProvider()
@@ -83,14 +81,19 @@ function getAiMode(): AiMode {
     .get<AiMode>(ConfigKeys.thesaurusAiMode, 'ask');
 }
 
-/** Whether to use the AI model for a lookup. Mirrors "Revise with AI": if a
- *  model is active, use it automatically — no separate opt-in — unless the user
- *  has explicitly pinned the engine to a dictionary ('local'). */
+/** Whether to use AI for a lookup. On by default (no separate opt-in) unless the
+ *  user pinned the dictionary ('local'). Single-model design: AI synonyms run on
+ *  the one editor model, so this is gated on an AI engine being active. */
 function shouldUseAi(): boolean {
   if (getAiMode() === 'local') {
     return false; // user chose dictionary-only via the engine picker
   }
-  return currentModelName() !== 'off'; // an Ollama/OpenRouter model is configured
+  return currentModelName() !== 'off';
+}
+
+/** The model that answers AI lookups: the single editor model. */
+function activeLookupModel(): string {
+  return currentModelName();
 }
 
 async function setAiMode(mode: AiMode): Promise<void> {
@@ -107,11 +110,11 @@ function syncAiModeContext(): void {
 /** One picker to choose where synonyms & antonyms come from — collapsing the two
  *  config knobs (aiMode + dictionary source) into a single clear choice. Marks
  *  the current selection and applies the right combination. */
-async function selectEngine(secrets: SecretStore): Promise<void> {
+async function selectEngine(): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(EXTENSION_ID);
   const mode = getAiMode();
   const source = cfg.get<Source>(ConfigKeys.thesaurusSource, 'auto');
-  const model = currentModelName();
+  const model = activeLookupModel();
   // What's effectively active right now, for the check-mark.
   const activeId: EngineChoice =
     mode === 'ai' ? 'ai' : mode === 'ask' ? 'ask' : source;
@@ -124,14 +127,14 @@ async function selectEngine(secrets: SecretStore): Promise<void> {
     label: (id === activeId ? '$(check) ' : '') + label,
     detail
   });
+  // Single-model design: synonyms use the one AI model (Settings → AI Model),
+  // the same model that powers Brainstorm/Revise/Spell.
+  const aiDetail =
+    model !== 'off'
+      ? `Context-aware results from your AI model (${model}). Falls back to the dictionary if it isn’t running.`
+      : 'Context-aware results from your local AI model (Ollama). Enable AI in Proser Settings first.';
   const items: EngineItem[] = [
-    make(
-      'ai',
-      '$(sparkle) Local AI model',
-      model !== 'off'
-        ? `Context-aware results from your AI model (${model}). Falls back to the dictionary if it isn’t running.`
-        : 'Context-aware results from a local AI model (Ollama). Sets one up if needed.'
-    ),
+    make('ai', '$(sparkle) AI model', aiDetail),
     make('online', '$(cloud) Online thesaurus (Datamuse)', 'Fast, broad word lists from the Datamuse API. Needs internet.'),
     make('offline', '$(book) Offline dictionary (WordNet)', 'Built-in, fully offline. Sparser, and weak on antonyms.'),
     make('auto', '$(list-unordered) Auto dictionary', 'Try Datamuse online, fall back to the offline dictionary.'),
@@ -146,7 +149,7 @@ async function selectEngine(secrets: SecretStore): Promise<void> {
     return;
   }
   if (pick.id === 'ai') {
-    await enableAi(secrets); // sets aiMode=ai and starts/sets up the model
+    await enableAi(); // sets aiMode=ai and configures the AI Helper
   } else if (pick.id === 'ask') {
     await setAiMode('ask');
     vscode.window.setStatusBarMessage('$(question) Proser: will ask which engine on the next lookup.', 3000);
@@ -160,9 +163,10 @@ async function selectEngine(secrets: SecretStore): Promise<void> {
   }
 }
 
-/** Switches synonyms to AI: defaults the engine to local Ollama (Gemma) when
- *  none is configured, then walks through start/pull/key setup. */
-async function enableAi(secrets: SecretStore): Promise<void> {
+/** Switches synonyms to the AI model — the single model that also powers
+ *  Brainstorm/Revise/Spell. When no AI engine is set up yet, points the user at
+ *  Settings → AI Model; until then synonyms fall back to the dictionary. */
+async function enableAi(): Promise<void> {
   // Guard here (not just in the 'ask' prompt) so the command-palette and
   // right-click paths can't mutate global config in an untrusted workspace.
   if (!vscode.workspace.isTrusted) {
@@ -171,26 +175,20 @@ async function enableAi(secrets: SecretStore): Promise<void> {
     );
     return;
   }
-  const cfg = vscode.workspace.getConfiguration(EXTENSION_ID);
-  const prevEngine = cfg.get<string>(ConfigKeys.aiEngine, 'off');
-  if (prevEngine === 'off') {
-    await cfg.update(ConfigKeys.aiEngine, 'ollama', vscode.ConfigurationTarget.Global);
-  }
   await setAiMode('ai');
-
-  const engine = await prepareEngine(secrets); // start / pull / key as needed
-  if (engine) {
-    vscode.window.setStatusBarMessage(`$(sparkle) Proser: synonyms now use ${engine.label}.`, 4000);
-  } else {
-    // Setup was cancelled/failed — don't leave a dangling global engine change
-    // that would hijack Revise-with-AI (e.g. block the OpenRouter choice).
-    if (prevEngine === 'off') {
-      await cfg.update(ConfigKeys.aiEngine, 'off', vscode.ConfigurationTarget.Global);
-    }
+  if (currentModelName() !== 'off') {
     vscode.window.setStatusBarMessage(
-      '$(book) Proser: AI selected — using the dictionary until a model is ready.',
+      `$(sparkle) Proser: synonyms now use ${currentModelName()}.`,
       4000
     );
+  } else {
+    const action = await vscode.window.showInformationMessage(
+      'Synonyms will use your AI model. Enable AI and pick a model in Proser Settings → AI Model.',
+      'Set up AI'
+    );
+    if (action === 'Set up AI') {
+      void vscode.commands.executeCommand(Commands.aiSelectLocalModel);
+    }
   }
 }
 
@@ -220,7 +218,7 @@ class ThesaurusCompletionProvider implements vscode.CompletionItemProvider {
   }
 }
 
-async function runThesaurus(kind: ThesaurusKind, secrets: SecretStore): Promise<void> {
+async function runThesaurus(kind: ThesaurusKind): Promise<void> {
   const editor = vscode.window.activeTextEditor;
   if (!editor || editor.document.languageId !== MARKDOWN_LANGUAGE_ID) {
     return;
@@ -245,8 +243,9 @@ async function runThesaurus(kind: ThesaurusKind, secrets: SecretStore): Promise<
   const sentence = doc.lineAt(range.start.line).text.trim();
   const noun = kind === 'synonyms' ? 'synonyms' : 'antonyms';
 
-  // Use the active AI model automatically (like Revise); dictionary otherwise.
-  const lookup = await gatherWords(secrets, kind, query, sentence, shouldUseAi());
+  // Use the small synonyms helper automatically (never the big editor model);
+  // dictionary otherwise.
+  const lookup = await gatherWords(kind, query, sentence, shouldUseAi());
   const unique = lookup.words;
   if (unique.length === 0) {
     vscode.window.showInformationMessage(
@@ -286,7 +285,7 @@ async function runThesaurus(kind: ThesaurusKind, secrets: SecretStore): Promise<
 function sourceLabel(source: LookupSource): string {
   switch (source) {
     case 'ai':
-      return `AI (${currentModelName()})`;
+      return `AI (${activeLookupModel()})`;
     case 'online':
       return 'Datamuse';
     case 'offline':
@@ -326,7 +325,6 @@ export function noResultsMessage(
 /** Shared gather: AI-first (when enabled and ready) with a soft timeout, then
  *  the Datamuse/WordNet fallback; returns the deduped, capped list. */
 async function gatherWords(
-  secrets: SecretStore,
   kind: ThesaurusKind,
   query: string,
   sentence: string,
@@ -348,7 +346,7 @@ async function gatherWords(
         triedAi = true;
         const timer = setTimeout(() => controller.abort(), 15000);
         try {
-          const ai = await aiSuggestions(secrets, query, sentence, kind, max, controller.signal);
+          const ai = await aiSuggestions(query, sentence, kind, max, controller.signal);
           aiStatus = ai.status;
           if (ai.words.length > 0) {
             resultSource = 'ai';
@@ -372,7 +370,6 @@ async function gatherWords(
 /** Returns the capitalization-matched suggestion list (no UI). The pretty view
  *  renders its own anchored card from this, so we don't show a QuickPick. */
 export async function suggestionsFor(
-  secrets: SecretStore,
   kind: ThesaurusKind,
   word: string,
   sentence: string
@@ -382,7 +379,7 @@ export async function suggestionsFor(
   if (!/[\p{L}]/u.test(query)) {
     return { words: [], sourceLabel: '', triedAi: false, aiStatus: 'skipped' };
   }
-  const lookup = await gatherWords(secrets, kind, query, sentence, shouldUseAi());
+  const lookup = await gatherWords(kind, query, sentence, shouldUseAi());
   return {
     words: lookup.words.map((w) => matchCapitalization(original, w)),
     sourceLabel: sourceLabel(lookup.source),
@@ -421,7 +418,6 @@ async function gatherSuggestions(
 /** Best-effort AI suggestions; silent (never blocks the thesaurus) if the
  *  engine is off, unconfigured, or errors. */
 async function aiSuggestions(
-  secrets: SecretStore,
   word: string,
   sentence: string,
   kind: ThesaurusKind,
@@ -429,7 +425,10 @@ async function aiSuggestions(
   signal?: AbortSignal
 ): Promise<{ words: string[]; status: AiStatus }> {
   try {
-    const engine = await createEngine(secrets);
+    // Always the small synonyms helper (its own server) — defaulting to the
+    // recommended co-resident model when none is set. Never the big editor model,
+    // so word lookups stay snappy and don't compete with Brainstorm/Revise.
+    const engine = await getSynonymsEngine();
     if (!engine) {
       return { words: [], status: 'off' };
     }

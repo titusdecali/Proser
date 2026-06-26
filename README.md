@@ -24,11 +24,16 @@ A live **WYSIWYG** view backed by the real `.md` file — your edits are real ed
 (undo, git diff, save all work the same as ever).
 
 - A clean, **book-width centered page** with adjustable font size.
-- **Right-click anything**: synonyms / antonyms, *Revise with AI*, and inline
-  formatting (**bold**, *italic*, underline, ~~strike~~, `code`) — or just right-click a
-  word, no selecting required.
-- **Inline spelling squiggles**, **Find** (`Ctrl/Cmd+F`), live word-count footer, and a
-  one-tap **Markdown** toggle when you want the raw source.
+- **Right-click anything**: **definition** (the book icon), synonyms / antonyms,
+  *Revise with AI*, and inline formatting (**bold**, *italic*, underline, ~~strike~~) — or
+  just right-click a word, no selecting required.
+- **Live writing checks as you type** — color-coded underlines, each fixable in one
+  right-click: spelling (red), **grammar** (blue, offline via
+  [Harper](https://writewithharper.com)), **passive voice** (purple), **tense slips**
+  (orange, local AI in the background), **sentence spacing** (yellow), and **quotation
+  punctuation** (teal). Turn each on or off in **Settings → Live Style Checks**.
+- **Find** (`Ctrl/Cmd+F`), live word-count footer, and a one-tap **Markdown** toggle when
+  you want the raw source.
 
 Open it from the editor title bar (the book icon), or *Reopen Editor With… → Proser*.
 
@@ -47,25 +52,39 @@ Open it from the editor title bar (the book icon), or *Reopen Editor With… →
   <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmh5q2H0rznrEbOo46XUwZkMeGamiK3yWtIfJqu" alt="Spell check that understands prose" width="60%">
 </div>
 
-## 📖 Thesaurus
+## 📖 Thesaurus & Dictionary
 
 Right-click a word for **synonyms or antonyms** — online (Datamuse) with an offline
 WordNet fallback, or **context-aware** suggestions when AI is enabled.
+
+Click the **book icon** in the same menu to open the word's full **definition** in a side
+panel — pronunciation, meanings grouped by part of speech, and example sentences. It uses
+the free online dictionary with an offline **WordNet** fallback, so it still works without a
+connection; choose the source with `proser.dictionary.source` (auto / online / offline).
 
 <div align="center">
   <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhf2sFkJvPGJDjwRp264CZ0nIQW138ytYived7" alt="The right word, in context — synonyms in the Pretty view" width="60%">
 </div>
 
-## 🔍 Editor checks (Proser sidebar → Editor tab)
+## 🔍 Editor checks
 
 Catch the things drafts hide:
 
-- **Tense consistency** — flags sentences that drift from your narrative tense.
+- **Grammar** — subject–verb agreement, swapped homophones (*their/there*), repeated words,
+  and more, via the offline **[Harper](https://writewithharper.com)** engine.
+- **Tense consistency** — flags narration that drifts from your narrative tense (dialogue,
+  which may speak in any tense, is left alone).
 - **Passive voice** — finds passive constructions (works offline; sharper with AI).
 - **Continuity** — AI scan for contradictions in names, details, timeline, and facts.
 
-Run a check once, or toggle **Scan continuously** to re-check as you write. Each finding
-has **Go / Fix / Ignore**, and *Go* jumps right to the passage in the Pretty view.
+**Grammar, tense, and passive voice also run automatically in the background** as you write,
+shown as live underlines in the Pretty editor (grammar is offline via Harper; tense uses your
+**local AI model**; passive is instant). Right-click any underline to fix it in one click —
+or **Dismiss** it, and that sentence won't be flagged again. A fixed sentence clears
+immediately and never comes back.
+
+For a full pass, the **Proser sidebar → Editor tab** runs any check on demand (or **Scan
+continuously**); each finding has **Go / Fix / Ignore**, and *Go* jumps right to the passage.
 
 ## 📚 Manuscript tools (Proser sidebar → Insert / Settings)
 
@@ -83,10 +102,14 @@ has **Go / Fix / Ignore**, and *Go* jumps right to the passage in the Pretty vie
 ## 🤖 Optional AI assistant
 
 - **Revise with AI** on any selection, with reusable saved prompts.
-- Powers context-aware synonyms and the continuity check.
+- Powers context-aware synonyms, the tense and continuity checks, and Story Memory.
 - Choose your engine: **OpenRouter** (cloud) or **Ollama** (fully **local & private**).
   Pick, switch, or delete local models from the status-bar **Model** indicator. Your
   API key lives in the OS keychain — never in settings.
+- **Use the cloud only where it counts.** Pick **Cloud (OpenRouter)** as your editor model
+  and you're prompted for the key right away — but that key powers **only Brainstorm &
+  Revise**. Spell check, synonyms, and the tense/passive checks always run on your **local**
+  model, so the everyday checks stay private and free.
 
 <div align="center">
   <img src="https://9ppl2dxtsd.ufs.sh/f/9USzCh2sMPmhpycBm7FdnfFy61qwHZUv0as34zXbpu5Ai87P" alt="Revise with AI, your way" width="60%">
@@ -112,6 +135,10 @@ Document **outline**, **focus mode** and **typewriter mode**, and writing-qualit
   the local path needs **[Ollama](https://ollama.com)** installed. Everything else —
   spell check, thesaurus (offline), word count, the Pretty editor, and export — works
   with no account and no network.
+
+## Support
+
+If Proser makes your writing better, you can [**buy me a coffee ☕**](https://buymeacoffee.com/titusdecali) — it keeps the project going.
 
 ## License
 

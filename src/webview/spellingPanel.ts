@@ -1,6 +1,8 @@
 // Browser bundle for the Spelling sidebar (media/spelling.js). Renders the
 // misspellings the host sends and relays the user's actions back.
 
+import { onHostMessage } from './messaging';
+
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 const vscode = acquireVsCodeApi();
 
@@ -124,11 +126,8 @@ function render(state: State): void {
   }
 }
 
-window.addEventListener('message', (e: MessageEvent) => {
-  const msg = e.data;
-  if (msg && msg.type === 'state') {
-    render(msg as State);
-  }
+onHostMessage({
+  state: (msg) => render(msg as State)
 });
 
 vscode.postMessage({ type: 'ready' });

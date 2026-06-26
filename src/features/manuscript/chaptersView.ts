@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { Commands, VIEW_TYPE_CHAPTERS, VIEW_TYPE_MARKDOWN_EDITOR } from '../../constants';
 import { activeMarkdownDoc, gatherChapterFiles, manuscriptFolder, titleFromFilename } from './compile';
+import { getStoryScope, hasConfiguredRoot, listStoryFiles } from '../storyMemory/scope';
 
 /** One chapter file. Clicking it opens the chapter in the Pretty editor; the
  *  one you're currently viewing is highlighted. */
@@ -15,9 +16,9 @@ class ChapterItem extends vscode.TreeItem {
       ? new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.blue'))
       : new vscode.ThemeIcon('book');
     this.command = {
-      command: 'vscode.openWith',
+      command: Commands.openChapter,
       title: 'Open Chapter',
-      arguments: [uri, VIEW_TYPE_MARKDOWN_EDITOR]
+      arguments: [uri]
     };
   }
 }
@@ -38,13 +39,20 @@ class ChaptersProvider implements vscode.TreeDataProvider<ChapterItem> {
   }
 
   async getChildren(): Promise<ChapterItem[]> {
-    const folder = manuscriptFolder();
-    if (!folder) {
-      return [];
-    }
     const activeKey = activeMarkdownDoc()?.uri.toString();
     try {
-      const files = await gatherChapterFiles(folder);
+      // Prefer the configured Story Folder so the list shows the actual manuscript
+      // chapters — not whatever folder the active file sits in (which defaults to
+      // the workspace root, i.e. notes/research). Falls back to the active/root
+      // folder only when no Story Folder has been set.
+      let files: vscode.Uri[];
+      if (await hasConfiguredRoot()) {
+        const scope = await getStoryScope();
+        files = scope ? await listStoryFiles(scope.root) : [];
+      } else {
+        const folder = manuscriptFolder();
+        files = folder ? await gatherChapterFiles(folder) : [];
+      }
       return files.map((u) => new ChapterItem(u, u.toString() === activeKey));
     } catch {
       return []; // folder unreadable (e.g. nothing open yet)
@@ -65,6 +73,26 @@ export function registerChaptersView(context: vscode.ExtensionContext): void {
   const refresh = (): void => provider.refresh();
   const watcher = vscode.workspace.createFileSystemWatcher('**/*.md');
 
+  // Mirror the file Explorer's preview behavior: a single click opens the chapter as
+  // a PREVIEW tab (italic — replaced by the next single click), a double click (a
+  // second click on the same item within 500ms) opens it PINNED. Editing or
+  // double-clicking the tab also pins it (VS Code handles that natively).
+  let lastClick = { uri: '', time: 0 };
+  const openChapter = async (uri: vscode.Uri): Promise<void> => {
+    const key = uri.toString();
+    const now = Date.now();
+    const isDouble = key === lastClick.uri && now - lastClick.time < 500;
+    lastClick = { uri: key, time: now };
+    await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE_MARKDOWN_EDITOR, {
+      preview: !isDouble, // single click → preview (honored only when workbench.editor.enablePreview is on)
+      // Reuse the current editor group. Without this, clicking from the Chapters
+      // tree (focus in the sidebar) lets VS Code pick a group — when the editor is
+      // split it lands in the OTHER group, opening the chapter in a separate tab
+      // instead of replacing the one you're reading.
+      viewColumn: vscode.ViewColumn.Active
+    });
+  };
+
   context.subscriptions.push(
     vscode.window.createTreeView(VIEW_TYPE_CHAPTERS, { treeDataProvider: provider }),
     watcher,
@@ -73,6 +101,7 @@ export function registerChaptersView(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveTextEditor(refresh), // folder + active highlight follow you
     vscode.window.tabGroups.onDidChangeTabs(refresh), // Pretty-tab switches
     vscode.commands.registerCommand(Commands.chaptersRefresh, refresh),
+    vscode.commands.registerCommand(Commands.openChapter, openChapter),
 
     // VS Code can't *default* a container to the right (secondary) side bar, but
     // this focuses the Proser panel and opens the built-in "move view" picker —

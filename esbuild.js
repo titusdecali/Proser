@@ -19,7 +19,7 @@ async function main() {
     platform: 'node',
     target: 'node18',
     outfile: 'dist/extension.js',
-    external: ['vscode', 'nspell', 'dictionary-en', 'dictionary-en-gb', 'wordpos', 'docx', 'pdfkit'],
+    external: ['vscode', 'nspell', 'dictionary-en', 'dictionary-en-gb', 'wordpos', 'docx', 'pdfkit', 'harper.js', 'harper.js/binaryInlined'],
     sourcemap: !production,
     minify: production,
     logLevel: 'info'

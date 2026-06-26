@@ -6,7 +6,7 @@ import {
   estimateReadingMinutes,
   getProseTokens
 } from '../src/util/wordcount';
-import { getProseSpans } from '../src/util/markdownScan';
+import { getProseSpans, stripFrontmatter } from '../src/util/markdownScan';
 
 describe('countTokens', () => {
   it('counts plain words', () => {
@@ -72,6 +72,40 @@ describe('getProseSpans / getProseTokens', () => {
   it('returns no spans for an all-code document', () => {
     const md = ['```', 'only code', '```'].join('\n');
     assert.strictEqual(getProseSpans(md).length, 0);
+  });
+});
+
+describe('stripFrontmatter', () => {
+  it('removes a leading YAML block and keeps the body as a suffix', () => {
+    const md = ['---', 'title: X', 'tags: a b', '---', '', 'Body words only.'].join('\n');
+    const body = stripFrontmatter(md);
+    assert.strictEqual(body, '\nBody words only.');
+    // The result is a suffix, so offsets into the ORIGINAL text stay valid.
+    assert.ok(md.endsWith(body));
+  });
+
+  it('leaves text without frontmatter unchanged', () => {
+    const md = 'Just prose.\nMore.';
+    assert.strictEqual(stripFrontmatter(md), md);
+  });
+
+  it('does not treat an unclosed leading --- as frontmatter', () => {
+    const md = ['---', 'not metadata', 'more text'].join('\n');
+    assert.strictEqual(stripFrontmatter(md), md);
+  });
+
+  it('handles CRLF line endings', () => {
+    assert.strictEqual(stripFrontmatter('---\r\ntitle: X\r\n---\r\nBody.'), 'Body.');
+  });
+
+  it('does not close on a ---- thematic break inside the block', () => {
+    const md = ['---', 'note: see below', '----', 'real: closer', '---', 'Body6.'].join('\n');
+    assert.strictEqual(stripFrontmatter(md), 'Body6.');
+  });
+
+  it('tolerates trailing whitespace on the delimiter', () => {
+    const md = ['---  ', 'k: v', '---', 'Body7.'].join('\n');
+    assert.strictEqual(stripFrontmatter(md), 'Body7.');
   });
 });
 

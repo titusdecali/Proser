@@ -94,6 +94,8 @@ async function exportManuscript(kind: 'docx' | 'pdf', scope: Scope): Promise<voi
 export function registerManuscript(context: vscode.ExtensionContext, spell: SpellService): void {
   const sidebar = new ManuscriptSidebar(context, spell);
   context.subscriptions.push(
+    // Dispose the sidebar's pending debounce timers on extension teardown.
+    sidebar,
     // Keep the webview alive when hidden so toggling it open is instant (no reload).
     vscode.window.registerWebviewViewProvider(MANUSCRIPT_VIEW_ID, sidebar, {
       webviewOptions: { retainContextWhenHidden: true }

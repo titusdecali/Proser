@@ -9,8 +9,9 @@ import { registerQualityLint } from './features/qualityLint/qualityLinter';
 import { registerOutline } from './features/outline/documentSymbols';
 import { registerWritingModes } from './features/focusMode/focusMode';
 import { registerAI } from './features/ai/registerAI';
-import { registerAiModelStatus } from './features/ai/aiModelStatus';
+import { startModelStatePolling } from './features/ai/modelState';
 import { registerBrainstorm } from './features/ai/brainstormPanel';
+import { registerStoryMemory } from './features/storyMemory/register';
 import { registerPrettyEditor } from './features/wysiwyg/ProserEditorProvider';
 import { registerManuscript } from './features/manuscript/register';
 import { registerChaptersView } from './features/manuscript/chaptersView';
@@ -31,7 +32,8 @@ export function activate(context: vscode.ExtensionContext): void {
   registerOutline(context); // M5
   registerWritingModes(context); // M5 (focus + typewriter)
   registerAI(context); // M6
-  registerAiModelStatus(context); // M6 (status-bar model indicator + quick switch/delete)
+  startModelStatePolling(context); // footer: live "Loading/Ready" + VRAM for the one model
+  registerStoryMemory(context); // M12 (Story Memory engine — must precede Brainstorm so it can pull canon)
   registerBrainstorm(context); // M11 (AI brainstorming chat panel)
   registerPrettyEditor(context, spell); // M7 (Pretty editor + inline spelling squiggles)
   registerChaptersView(context); // M8 (Chapters list in the Proser sidebar)

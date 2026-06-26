@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { MARKDOWN_LANGUAGE_ID } from '../../constants';
+import { MARKDOWN_LANGUAGE_ID, AI_CONTEXT_TOKENS } from '../../constants';
 import { AiMessage } from './AiClient';
 import { SecretStore } from './secretStore';
 import { prepareEngine } from './engineFactory';
@@ -81,7 +81,8 @@ export async function reviseText(secrets: SecretStore, original: string): Promis
             chars += chunk.length;
             progress.report({ message: `${chars} characters…` });
           },
-          controller.signal
+          controller.signal,
+          { numCtx: AI_CONTEXT_TOKENS }
         );
         return full.trim();
       }
@@ -169,7 +170,8 @@ export async function reviseOptions(
             chars += chunk.length;
             progress.report({ message: `${chars} characters…` });
           },
-          controller.signal
+          controller.signal,
+          { numCtx: AI_CONTEXT_TOKENS }
         );
         return full.trim();
       }

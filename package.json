@@ -2,7 +2,7 @@
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
   "description": "Creative writing with local AI editor",
-  "version": "1.2.6",
+  "version": "1.4.24",
   "publisher": "titusdecali",
   "license": "MIT",
   "author": {
@@ -21,7 +21,10 @@
   "bugs": {
     "url": "https://github.com/titusdecali/proser/issues"
   },
-  "homepage": "https://github.com/titusdecali/proser#readme",
+  "homepage": "https://titusdecali.com/proser",
+  "sponsor": {
+    "url": "https://buymeacoffee.com/titusdecali"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -173,10 +176,25 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "proser.storyMemory.build",
+        "title": "Build Story Memory",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.storyMemory.rebuild",
+        "title": "Rebuild Story Memory (from scratch)",
+        "category": "Proser"
+      },
+      {
+        "command": "proser.storyMemory.chooseFolder",
+        "title": "Choose Story Folder…",
+        "category": "Proser"
+      },
+      {
         "command": "proser.editor.checks",
         "title": "Open Proser Panel",
         "category": "Proser",
-        "icon": "media/manuscript.svg"
+        "icon": "media/proser-logo.svg"
       },
       {
         "command": "proser.moveToSide",
@@ -222,7 +240,7 @@
         {
           "id": "proser",
           "title": "Proser",
-          "icon": "media/manuscript.svg"
+          "icon": "media/proser-logo.svg"
         }
       ]
     },
@@ -237,7 +255,7 @@
           "type": "webview",
           "id": "proser.manuscriptView",
           "name": "Proser",
-          "icon": "media/manuscript.svg",
+          "icon": "media/proser-logo.svg",
           "contextualTitle": "Proser"
         },
         {
@@ -248,6 +266,18 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "proser.chaptersView",
+        "contents": "Open a project folder to see your manuscript chapters.\n[Open Project Folder](command:workbench.action.files.openFolder)",
+        "when": "workbenchState == empty"
+      },
+      {
+        "view": "proser.chaptersView",
+        "contents": "No chapters here yet. Choose the folder that holds your manuscript chapters.\n[Set Story Folder](command:proser.storyMemory.chooseFolder)",
+        "when": "workbenchState != empty"
+      }
+    ],
     "menus": {
       "editor/context": [
         {
@@ -349,6 +379,21 @@
           "default": "ask",
           "description": "Source for synonyms/antonyms. Switch anytime from the editor right-click menu."
         },
+        "proser.dictionary.source": {
+          "type": "string",
+          "enum": [
+            "online",
+            "offline",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Free Dictionary API — richest entries (phonetics, examples, meanings by part of speech). Requires internet.",
+            "Bundled WordNet (offline) — ~155k words, no network needed.",
+            "Free Dictionary API first, with offline WordNet fallback when offline or the word isn't found."
+          ],
+          "default": "auto",
+          "description": "Where the right-click Dictionary looks up a word's meaning."
+        },
         "proser.spellcheck.enabled": {
           "type": "boolean",
           "default": true,
@@ -358,6 +403,51 @@
           "type": "number",
           "default": 1000,
           "description": "Delay before re-checking spelling after edits, in milliseconds."
+        },
+        "proser.spacing.afterPeriod": {
+          "type": "string",
+          "enum": [
+            "none",
+            "1",
+            "2"
+          ],
+          "enumDescriptions": [
+            "No space after a sentence-ending period.",
+            "One space after a sentence-ending period.",
+            "Two spaces after a sentence-ending period."
+          ],
+          "default": "1",
+          "description": "Expected number of spaces after a sentence-ending period. Sentences whose spacing differs get a yellow underline in the editor (logic-based, no AI). Line and paragraph breaks are never flagged."
+        },
+        "proser.quotes.punctuationStyle": {
+          "type": "string",
+          "enum": [
+            "inside",
+            "outside",
+            "off"
+          ],
+          "enumDescriptions": [
+            "American: periods & commas go inside the closing quote (…past.”). Flags the British placement.",
+            "British: periods & commas go outside the closing quote (…past”.). Flags the American placement — best-effort; may over-flag full-sentence dialogue.",
+            "Don’t check punctuation placement around quotation marks."
+          ],
+          "default": "inside",
+          "description": "Where periods and commas sit relative to a closing double quotation mark. The non-preferred placement gets a teal underline in the editor (logic-based, no AI). Only double quotes are checked."
+        },
+        "proser.checks.passiveVoice": {
+          "type": "boolean",
+          "default": true,
+          "description": "Underline passive-voice sentences live in the editor (purple, logic-based — instant, no AI)."
+        },
+        "proser.checks.tense": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Underline tense-inconsistent sentences live in the editor (orange). Uses the local AI model (independent of the Spell Check toggle); it's throttled, cached, and skipped on very large files (use the sidebar's **Scan** for those). Needs a capable model (Gemma-class or larger)."
+        },
+        "proser.checks.grammar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Underline grammar / word-choice errors live in the editor (blue, AI proofread). Turn this off to silence the blue squiggles while keeping AI spell-checking on."
         },
         "proser.spellcheck.language": {
           "type": "string",
@@ -468,6 +558,20 @@
           "scope": "machine-overridable",
           "default": "http://localhost:11434",
           "description": "Base URL of the local Ollama server."
+        },
+        "proser.ai.ollama.brainstormContextTokens": {
+          "type": "number",
+          "scope": "machine-overridable",
+          "default": 50000,
+          "minimum": 2048,
+          "maximum": 200000,
+          "markdownDescription": "Max context window (tokens) for **Brainstorm** and the **Story Memory** it injects. The folded canon is budgeted to ~70% of this (so the 50000 default fits ~35k of memory), and it never overflows. **Bigger fits more of your story memory but uses more VRAM** (the model's KV cache grows with it). Capped by the model's own context window and a 200000 ceiling. Raise it to fit a larger memory if you have the VRAM; lower it if the model runs out of memory."
+        },
+        "proser.ai.spellAi": {
+          "type": "boolean",
+          "scope": "machine-overridable",
+          "default": true,
+          "markdownDescription": "Use your AI model for **spelling** (clears dictionary false-positives like names/coined words/sounds and grades grammar). Turn off for Hunspell **dictionary only**. Set it from **Proser Settings → Spell Check**. (Synonyms use **Settings → Synonyms**: AI / Online / Offline.)"
         }
       }
     }
@@ -487,6 +591,7 @@
     "dictionary-en": "^4.0.0",
     "dictionary-en-gb": "^3.0.0",
     "docx": "^9.7.1",
+    "harper.js": "^2.4.0",
     "nspell": "^2.1.5",
     "pdfkit": "^0.19.1"
   },

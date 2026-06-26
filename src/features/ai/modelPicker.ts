@@ -1,90 +1,64 @@
 import * as vscode from 'vscode';
-import { fetchWithTimeout } from '../../util/fetchTimeout';
+import { SecretStore } from './secretStore';
 
-interface CuratedModel {
-  label: string;
-  slug: string;
-  detail: string;
-}
-
-/** Recommended writing models on OpenRouter. The default (Scout) is fast via
- *  Groq; Gemma options are included per the user's preference. Slugs are
- *  best-effort verified against the live model list before being offered. */
-const CURATED: CuratedModel[] = [
-  {
-    label: 'Llama 4 Scout',
-    slug: 'meta-llama/llama-4-scout',
-    detail: 'Fast (Groq). Recommended default.'
-  },
-  {
-    label: 'Llama 4 Maverick',
-    slug: 'meta-llama/llama-4-maverick',
-    detail: 'Higher quality, a little slower.'
-  },
-  {
-    label: 'Gemma 3 27B',
-    slug: 'google/gemma-3-27b-it',
-    detail: 'Strong prose, Google Gemma.'
-  },
-  {
-    label: 'Gemma 2 9B',
-    slug: 'google/gemma-2-9b-it',
-    detail: 'Lighter Gemma option.'
-  }
-];
-
-/** Best-effort fetch of available model ids (public endpoint, no key needed). */
-async function fetchAvailableModelIds(): Promise<Set<string> | undefined> {
-  try {
-    const res = await fetchWithTimeout('https://openrouter.ai/api/v1/models');
-    if (!res.ok) {
-      return undefined;
-    }
-    const data = (await res.json()) as { data?: Array<{ id: string }> };
-    return new Set((data.data ?? []).map((m) => m.id));
-  } catch {
+/** The full "go to cloud" flow used by every Cloud (OpenRouter) entry point: first
+ *  offer the API-key input (pre-filled with the current key so it can be confirmed
+ *  or changed — the key powers Brainstorm/Revise), then the model-name input. Returns
+ *  the chosen slug, or undefined if the user backs out of either step. */
+export async function pickOpenRouterModelWithKey(
+  secrets: SecretStore,
+  current: string
+): Promise<string | undefined> {
+  const existing = await secrets.getApiKey();
+  if (!(await secrets.promptForApiKey(existing ?? undefined))) {
     return undefined;
   }
+  return pickOpenRouterModel(current);
 }
 
-/** Shows the curated picker (plus a custom-slug entry). Returns the chosen
- *  model slug, or undefined if cancelled. */
-export async function pickOpenRouterModel(current: string): Promise<string | undefined> {
-  const available = await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Window, title: 'Proser: loading models…' },
-    () => fetchAvailableModelIds()
-  );
+const MODELS_URL = 'https://openrouter.ai/models';
 
-  type Item = vscode.QuickPickItem & { slug?: string; custom?: boolean };
-  const items: Item[] = CURATED.map((m) => {
-    const unavailable = available && !available.has(m.slug);
-    return {
-      label: m.slug === current ? `$(check) ${m.label}` : m.label,
-      description: m.slug,
-      detail: unavailable ? `${m.detail}  —  ⚠ not currently available` : m.detail,
-      slug: m.slug
+/** Asks for the exact OpenRouter model name to use for Brainstorm & Revise. No
+ *  curated list — the user types the slug from openrouter.ai/models directly, with a
+ *  globe button that opens that page in the browser. An example placeholder shows the
+ *  format; the current model is shown in the prompt for reference. Returns the trimmed
+ *  slug, or undefined if cancelled. */
+export function pickOpenRouterModel(current: string): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolve) => {
+    const input = vscode.window.createInputBox();
+    input.title = 'OpenRouter Model';
+    input.prompt =
+      'Enter the exact OpenRouter model name for Brainstorm & Revise. ' +
+      `Click the globe to browse models.${current ? ` Current: ${current}.` : ''}`;
+    input.placeholder = 'google/gemini-3.1-flash-lite';
+    input.ignoreFocusOut = true;
+    input.buttons = [
+      { iconPath: new vscode.ThemeIcon('globe'), tooltip: 'Browse models on openrouter.ai' }
+    ];
+
+    let done = false;
+    const finish = (value: string | undefined): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      resolve(value);
+      input.dispose();
     };
-  });
-  items.push({ label: '$(edit) Custom model slug…', custom: true });
 
-  const picked = await vscode.window.showQuickPick(items, {
-    title: 'Select AI Model (OpenRouter)',
-    placeHolder: 'Pick a model for AI features'
-  });
-  if (!picked) {
-    return undefined;
-  }
-
-  if (picked.custom) {
-    const slug = await vscode.window.showInputBox({
-      title: 'Custom OpenRouter model slug',
-      value: current,
-      placeHolder: 'e.g. anthropic/claude-3.5-sonnet',
-      validateInput: (v) =>
-        v.includes('/') ? null : 'A model slug looks like “vendor/model”.'
+    input.onDidTriggerButton(() => void vscode.env.openExternal(vscode.Uri.parse(MODELS_URL)));
+    input.onDidChangeValue(() => {
+      input.validationMessage = undefined;
     });
-    return slug?.trim() || undefined;
-  }
-
-  return picked.slug;
+    input.onDidAccept(() => {
+      const v = input.value.trim();
+      if (!v.includes('/')) {
+        input.validationMessage = 'A model name looks like “vendor/model”, e.g. google/gemini-3.1-flash-lite.';
+        return;
+      }
+      finish(v);
+    });
+    input.onDidHide(() => finish(undefined));
+    input.show();
+  });
 }

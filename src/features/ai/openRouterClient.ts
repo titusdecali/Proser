@@ -1,7 +1,12 @@
-import { AiClient, AiMessage, ReadyState } from './AiClient';
-import { readLines } from './streamUtil';
+import { AiClient, AiMessage, ChatOpts, ReadyState } from './AiClient';
+import { consumeStream, STREAM_DONE } from './streamUtil';
 
 const ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
+
+/** One SSE `data:` frame from OpenRouter's chat-completions stream. */
+interface OpenRouterFrame {
+  choices?: Array<{ delta?: { content?: string } }>;
+}
 
 /** Cloud backend. Streams chat completions from OpenRouter, optionally
  *  preferring the Groq provider (with fallback). */
@@ -26,7 +31,8 @@ export class OpenRouterClient implements AiClient {
   async chat(
     messages: AiMessage[],
     onToken: (chunk: string) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    opts?: ChatOpts
   ): Promise<string> {
     if (!this.apiKey) {
       throw new Error('No OpenRouter API key set.');
@@ -39,6 +45,14 @@ export class OpenRouterClient implements AiClient {
     };
     if (this.preferGroq) {
       body.provider = { order: ['Groq'], allow_fallbacks: true };
+    }
+    if (opts?.format === 'json') {
+      body.response_format = { type: 'json_object' }; // constrained JSON output
+    } else if (opts?.format && typeof opts.format === 'object') {
+      body.response_format = {
+        type: 'json_schema',
+        json_schema: { name: 'extraction', strict: true, schema: opts.format }
+      };
     }
 
     const res = await fetch(ENDPOINT, {
@@ -58,28 +72,17 @@ export class OpenRouterClient implements AiClient {
       throw new Error(`OpenRouter ${res.status}: ${detail || res.statusText}`);
     }
 
-    let full = '';
-    for await (const line of readLines(res.body)) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data:')) {
-        continue;
-      }
-      const payload = trimmed.slice(5).trim();
-      if (payload === '[DONE]') {
-        break;
-      }
-      try {
-        const json = JSON.parse(payload);
-        const delta: string | undefined = json.choices?.[0]?.delta?.content;
-        if (delta) {
-          full += delta;
-          onToken(delta);
+    return consumeStream<OpenRouterFrame>(res.body, onToken, {
+      framePayload: (line) => {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) {
+          return null; // SSE comment / keep-alive
         }
-      } catch {
-        // Ignore keep-alive comments / partial frames.
-      }
-    }
-    return full;
+        const payload = trimmed.slice(5).trim();
+        return payload === '[DONE]' ? STREAM_DONE : payload;
+      },
+      extractDelta: (f) => f.choices?.[0]?.delta?.content
+    });
   }
 }
 
