@@ -70,7 +70,17 @@ function supportsSecondarySidebar(): boolean {
 
 export function registerChaptersView(context: vscode.ExtensionContext): void {
   const provider = new ChaptersProvider();
-  const refresh = (): void => provider.refresh();
+  // Coalesce bursts into ONE refresh: a single tab switch fires several events
+  // (active-editor + tab-change), and a multi-file Explorer op fires many — without
+  // this each would re-walk the story folder. A short debounce keeps the navigator
+  // responsive while collapsing redundant tree reads.
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  const refresh = (): void => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+    }
+    refreshTimer = setTimeout(() => provider.refresh(), 120);
+  };
   const watcher = vscode.workspace.createFileSystemWatcher('**/*.md');
 
   // Mirror the file Explorer's preview behavior: a single click opens the chapter as
@@ -94,10 +104,17 @@ export function registerChaptersView(context: vscode.ExtensionContext): void {
   };
 
   context.subscriptions.push(
+    { dispose: () => refreshTimer && clearTimeout(refreshTimer) },
     vscode.window.createTreeView(VIEW_TYPE_CHAPTERS, { treeDataProvider: provider }),
     watcher,
-    watcher.onDidCreate(refresh), // new chapter file
-    watcher.onDidDelete(refresh), // removed chapter
+    watcher.onDidCreate(refresh), // new chapter file (external disk change)
+    watcher.onDidDelete(refresh), // removed chapter (external disk change)
+    // File operations performed through VS Code (Explorer add/delete/rename, or the
+    // API) fire these immediately and reliably — the glob watcher above can miss or
+    // lag Explorer-initiated changes, which left the Chapters list stale.
+    vscode.workspace.onDidCreateFiles(refresh),
+    vscode.workspace.onDidDeleteFiles(refresh),
+    vscode.workspace.onDidRenameFiles(refresh),
     vscode.window.onDidChangeActiveTextEditor(refresh), // folder + active highlight follow you
     vscode.window.tabGroups.onDidChangeTabs(refresh), // Pretty-tab switches
     vscode.commands.registerCommand(Commands.chaptersRefresh, refresh),

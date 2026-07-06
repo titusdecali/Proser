@@ -86,8 +86,8 @@ export const ConfigKeys = {
   /** Live tense-consistency underline in the editor (AI, throttled + cached;
    *  runs on the local model whenever this is on — independent of AI spell). */
   checksTense: 'checks.tense',
-  /** Live grammar / word-choice underline in the editor (AI proofread). Lets the
-   *  user silence the blue squiggles without turning off AI spell-clearing. */
+  /** Live grammar / word-choice underline in the editor (Harper, local/offline).
+   *  Lets the user silence the blue squiggles without turning off AI spell-clearing. */
   checksGrammar: 'checks.grammar',
   qualityLintEnabled: 'qualityLint.enabled',
   wordcountStatusBarEnabled: 'wordcount.statusBarEnabled',

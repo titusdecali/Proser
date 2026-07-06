@@ -344,7 +344,12 @@ async function gatherWords(
       token.onCancellationRequested(() => controller.abort());
       if (useAi) {
         triedAi = true;
-        const timer = setTimeout(() => controller.abort(), 15000);
+        // 30s (not 15s): the editor model is normally pre-warmed on chapter open, so a
+        // lookup hits a resident model and returns in 1–3s. This longer ceiling only
+        // matters on a genuine cold load (first lookup before warm-up finished) — give
+        // it room to finish rather than dropping to the weaker Datamuse list. The
+        // progress notification is cancellable, so the user is never stuck.
+        const timer = setTimeout(() => controller.abort(), 30000);
         try {
           const ai = await aiSuggestions(query, sentence, kind, max, controller.signal);
           aiStatus = ai.status;

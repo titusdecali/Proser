@@ -12,7 +12,16 @@
  * data deps here before). If the load fails we record the error and return no findings
  * — grammar simply goes quiet, the editor keeps working; it never fails silently.
  */
-import { GrammarIssue } from './aiSpell';
+/** A grammar / word-choice error to underline (different color from spelling).
+ *  Harper is the sole producer; the editor anchors the underline by `phrase`. */
+export interface GrammarIssue {
+  /** The exact wrong text in the paragraph (used to anchor the underline). */
+  phrase: string;
+  /** Short human reason (Harper's message, e.g. "Did you mean `they're`?"). */
+  message: string;
+  /** The corrected replacement for `phrase`. */
+  fix: string;
+}
 
 interface HarperSpan {
   start: number;
@@ -32,19 +41,44 @@ interface HarperLint {
 interface HarperLinter {
   setup(): Promise<void>;
   lint(text: string): Promise<HarperLint[]>;
+  /** Partial rule on/off map as JSON, merged over Harper's defaults. Used to silence
+   *  rules that misfire on fiction (see {@link FICTION_RULE_CONFIG}). */
+  setLintConfigWithJSON(config: string): Promise<void>;
 }
+
+/** Harper rules turned OFF for fiction prose — its native, rule-level mechanism (cleaner
+ *  and more precise than post-filtering by message). Verified against real chapters: these
+ *  are the clear false-positive generators in creative writing. High-precision grammar
+ *  (subject/verb agreement, homophones like to/too, repetition) stays ON. Stylistic rules
+ *  the author chose to keep (SentenceCapitalization, CompoundNouns, MassNouns, NumericRange-
+ *  EnDash) are deliberately NOT here. Rule keys come from Harper's getLintDescriptions. */
+const FICTION_RULE_CONFIG: Record<string, boolean> = {
+  UnclosedQuotes: false, // fires on multi-paragraph / interrupted dialogue — the #1 noise source
+  AnA: false, // "a"/"an" misfires on coined & proper nouns ("a Eelan" → "an Eelan")
+  LetsConfusion: false, // "lets" (a normal verb) wrongly pushed to "let's"
+  EllipsisLength: false, // the manuscript intentionally uses "..."
+  UseEllipsisCharacter: false, // …and doesn't want it auto-converted to "…"
+  AvoidCurses: false // profanity is in scope for fiction; not the editor's business
+};
 
 /** Lint kinds we do NOT surface as grammar underlines. Spelling is owned by the
  *  dictionary + AI-spell pipeline; the rest are stylistic, which we keep off to hold
- *  the conservative "only clear mechanical errors" bar. Everything else (Agreement,
- *  Grammar, Repetition, Capitalization, Punctuation, Eggcorn, Malapropism, …) shows. */
+ *  the conservative "only clear mechanical errors" bar. `Typo` is excluded because it
+ *  is Harper's "split an unknown word into two known words" heuristic — it misfires on
+ *  closed compounds ("streetwear" → "street wear") and dropped-g dialect ("lookin'" →
+ *  "loo kin"), which are everywhere in fiction; genuine misspellings come back as
+ *  `Spelling` (owned by the dictionary), real merges as `BoundaryError`, and doubled
+ *  words as `Repetition`, so nothing useful is lost. `WordChoice` is intentionally NOT
+ *  excluded — it carries Harper's vetted homophone/confusable catches (e.g. to/too) and
+ *  tested clean on realistic fiction prose (see test/homophone.test.ts). Everything else
+ *  (Agreement, Grammar, Repetition, Capitalization, Punctuation, BoundaryError, …) shows. */
 const EXCLUDED_KINDS = new Set([
   'Spelling',
+  'Typo',
   'Style',
   'Enhancement',
   'Readability',
   'Redundancy',
-  'WordChoice',
   'Usage'
 ]);
 
@@ -67,6 +101,14 @@ async function getLinter(): Promise<HarperLinter | null> {
         const { binaryInlined } = (await import(binarySpec)) as { binaryInlined: unknown };
         const linter = new harper.LocalLinter({ binary: binaryInlined, dialect: harper.Dialect.American });
         await linter.setup();
+        // Apply the fiction-tuned rule config at the source. Isolated try/catch: if a future
+        // harper.js renames the config API, grammar keeps working with default rules rather
+        // than going silent.
+        try {
+          await linter.setLintConfigWithJSON(JSON.stringify(FICTION_RULE_CONFIG));
+        } catch {
+          /* config API unavailable — fall back to Harper's defaults */
+        }
         return linter;
       } catch (err) {
         loadError = err instanceof Error ? err.message : String(err);
@@ -94,6 +136,26 @@ function precedingWordStart(text: string, start: number): number {
     i--;
   }
   return i;
+}
+
+/** True when the token at `start` genuinely begins a sentence — it follows the start
+ *  of the text, a line break, or terminal punctuation (`.`/`!`/`?`/`…`, optionally
+ *  through a closing quote/bracket). Harper's capitalization linter mis-segments
+ *  comma-spliced run-ons and prose with unknown lowercase words, tagging a mid-
+ *  sentence word (e.g. "but" after "…, ") as a sentence start; this rejects those
+ *  while keeping real lowercase sentence starts (after a period or a paragraph break). */
+function startsSentence(text: string, start: number): boolean {
+  let i = start - 1;
+  while (i >= 0 && (text[i] === ' ' || text[i] === '\t')) {
+    i--;
+  }
+  if (i < 0 || text[i] === '\n' || text[i] === '\r') {
+    return true; // start of text, or a new line / paragraph
+  }
+  while (i >= 0 && '"\'”’)]'.includes(text[i])) {
+    i--; // skip closing quotes/brackets so `."` and `.)` still count as a boundary
+  }
+  return i < 0 || '.!?…'.includes(text[i]);
 }
 
 /**
@@ -124,6 +186,12 @@ export async function harperGrammar(text: string): Promise<GrammarIssue[]> {
       continue; // nothing actionable — don't underline what we can't one-click fix
     }
     const span = lint.span();
+    // Harper's sentence-capitalization linter mis-fires on comma-spliced run-ons,
+    // flagging a mid-sentence word as needing a capital. Keep it only when the word
+    // truly starts a sentence; otherwise drop the false positive.
+    if (lint.lint_kind() === 'Capitalization' && !startsSentence(text, span.start)) {
+      continue;
+    }
     const raw = text.slice(span.start, span.end);
     if (!raw.trim()) {
       continue;

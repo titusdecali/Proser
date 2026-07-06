@@ -64,6 +64,16 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       border-color: var(--vscode-button-background);
     }
     #toolbar button.toggle.active:hover { background: var(--vscode-button-hoverBackground); }
+    /* Icon buttons: show only the glyph; the text label slides open on hover/focus. */
+    #toolbar button.iconbtn { gap: 0; padding: 0 8px; }
+    #toolbar button .lbl {
+      display: inline-block; max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap;
+      margin-left: 0; transition: max-width 0.18s ease, opacity 0.18s ease, margin-left 0.18s ease;
+    }
+    #toolbar button.iconbtn:hover .lbl, #toolbar button.iconbtn:focus-visible .lbl {
+      max-width: 110px; opacity: 1; margin-left: 6px;
+    }
+    #toolbar button.iconbtn .caret { margin-left: 4px; }
 
     /* Segmented mode toggle — a pill with a filled active segment, same height. */
     #toolbar .seg {
@@ -394,7 +404,7 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       text-decoration-skip-ink: none;
       background-color: rgba(241, 76, 76, 0.12);
     }
-    /* Grammar / word-choice errors (AI proofread) — a BLUE wavy underline so it
+    /* Grammar / word-choice errors (Harper) — a BLUE wavy underline so it
        reads distinctly from the red spelling squiggle. */
     ::highlight(proser-grammar) {
       text-decoration: underline wavy var(--vscode-editorInfo-foreground, #3794ff);
@@ -447,15 +457,17 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
       <button data-mode="markdown" title="Edit the raw Markdown source">Markdown</button>
     </div>
     <div class="spacer"></div>
-    <button id="spellToggle" class="toggle" title="Toggle spell check (this view + Markdown)">Spelling</button>
-    <button id="issuesBtn" title="Editor checks — tense / passive voice / continuity — toggle the panel">Editor</button>
-    <button id="brainstormBtn" title="Brainstorm with AI — names, plots, scene ideas…">Brainstorm</button>
+    <button id="spellToggle" class="toggle iconbtn" title="Toggle spell check (this view + Markdown)" aria-label="Spelling"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8.5 6 12l7.5-8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Spelling</span></button>
+    <button id="grammarToggle" class="toggle iconbtn" title="Toggle grammar suggestions" aria-label="Grammar"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Grammar</span></button>
+    <button id="tenseBtn" class="toggle iconbtn" title="Narrative tense: Auto (click to override for this chapter)" aria-label="Tense" aria-haspopup="true"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.6V8l2.6 1.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Tense</span><svg class="caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4 5 6.5 7.5 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button id="issuesBtn" class="iconbtn" title="Editor checks — tense / passive voice / continuity — toggle the panel" aria-label="Editor"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.2 4 5.7 6.5 3M2.5 11.2 4 12.7 6.5 10M9 4.5h4.5M9 11.5h4.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Editor</span></button>
+    <button id="brainstormBtn" class="iconbtn" title="Brainstorm with AI — names, plots, scene ideas…" aria-label="Brainstorm"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8a4.2 4.2 0 0 0-2.6 7.5c.5.4.8.9.8 1.5v.4h3.6v-.4c0-.6.3-1.1.8-1.5A4.2 4.2 0 0 0 8 1.8Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6.6 13.4h2.8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg><span class="lbl">Brainstorm</span></button>
     <div class="fontctl">
       <button id="fontMinus" title="Decrease font size">−</button>
       <span id="fontSize">18</span>
       <button id="fontPlus" title="Increase font size">+</button>
     </div>
-    <button id="exportBtn" title="Export — DOCX/PDF (manuscript format) for this file or the whole folder">Export<svg class="caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4 5 6.5 7.5 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button id="exportBtn" class="iconbtn" title="Export — DOCX/PDF (manuscript format) for this file or the whole folder" aria-label="Export"><svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v6.5M5.2 6.7 8 9.5l2.8-2.8M3 12.5h10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Export</span><svg class="caret" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 4 5 6.5 7.5 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
   </div>
   <div id="editorWrap">
     <div id="editor"></div>

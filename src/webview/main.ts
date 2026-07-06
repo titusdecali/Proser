@@ -1,9 +1,12 @@
 import * as toastui from '@toast-ui/editor';
 import '@toast-ui/editor/dist/toastui-editor.css';
-import html2pdf from 'html2pdf.js';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 import { onHostMessage } from './messaging';
 import { HostToWebviewType } from './protocol';
-import { splitFrontmatter, blockifyComments } from './proseText';
+import { splitHead, blockifyComments } from './proseText';
+import { readTenseOverride, formatTenseComment, TenseOverride } from '../util/proserMeta';
+import { history as pmHistory, undo as pmUndo, redo as pmRedo, closeHistory as pmCloseHistory } from 'prosemirror-history';
 
 // Toast UI exposes the Editor class as a default (UMD) export.
 const Editor: any = (toastui as any).default ?? (toastui as any).Editor ?? toastui;
@@ -23,6 +26,9 @@ let displayed = false;
 let userTyping = false;
 let lastSent = '';
 let frontmatter = '';
+// Invisible per-chapter Proser metadata comment (e.g. tense override) peeled off the
+// top so it never renders/edits in Pretty; re-emitted by currentMarkdown() on save.
+let proserMeta = '';
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 let currentMode: 'pretty' | 'markdown' = 'pretty';
@@ -32,9 +38,89 @@ let exportFilename = 'document.pdf';
 
 const $ = (id: string) => document.getElementById(id);
 
-/** The full markdown the document should hold = preserved frontmatter + body. */
+/** The full markdown the document should hold = preserved head (frontmatter +
+ *  Proser metadata comment) + the edited body. */
 function currentMarkdown(): string {
-  return frontmatter + (editor ? editor.getMarkdown() : '');
+  return frontmatter + proserMeta + (editor ? editor.getMarkdown() : '');
+}
+
+// ---- Word-like undo/redo -------------------------------------------------
+// The Pretty editor is ProseMirror (via Toast UI). We give it OUR OWN
+// prosemirror-history plugin so we — not VS Code's TextDocument undo — own the
+// undo stack, and we seal a history group at every word boundary so each word
+// is a single Ctrl+Z step (Word-like). Toast's built-in history is swapped out
+// (it can't share the "history$" plugin key with ours), so undo/redo/closeHistory
+// from our import all drive the same, controllable stack.
+
+/** The live ProseMirror EditorView backing the WYSIWYG mode (null in Markdown
+ *  mode or before init). */
+function wysiwygView(): any {
+  try {
+    return editor?.getCurrentModeEditor?.()?.innerEditorView ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Replace Toast's history plugin with ours on the current WYSIWYG view.
+ *  Idempotent per view; the view is rebuilt on init and on every mode switch,
+ *  so this is re-run each time. Best-effort: if the internals don't match, the
+ *  key interceptor falls back to Toast's own undo via editor.exec(). */
+function installProseHistory(): void {
+  if (currentMode !== 'pretty') {
+    return;
+  }
+  const view = wysiwygView();
+  if (!view || view.__proserHistory) {
+    return;
+  }
+  try {
+    // Drop Toast's keyed history plugin ("history$") — two instances of a keyed
+    // plugin can't coexist — then add ours so closeHistory/undo target it.
+    const kept = view.state.plugins.filter((p: any) => !String(p?.key || '').startsWith('history'));
+    view.updateState(view.state.reconfigure({ plugins: kept.concat(pmHistory()) }));
+    view.__proserHistory = true;
+  } catch {
+    /* leave Toast's default history in place; the interceptor's exec() path still works */
+  }
+}
+
+// Word boundaries that seal the just-typed word as its own undo step.
+const WORD_BOUNDARY = /[\s.,!?;:]/;
+
+/** After a boundary character lands, close the history group so the next
+ *  keystroke starts a fresh undo step. Deferred a tick so ProseMirror has
+ *  finished applying the input before we dispatch. */
+function sealWordAfterInput(e: InputEvent): void {
+  const it = e?.inputType || '';
+  const isBreak = it === 'insertParagraph' || it === 'insertLineBreak';
+  const data = e?.data || '';
+  if (!isBreak && !(data && WORD_BOUNDARY.test(data))) {
+    return;
+  }
+  setTimeout(() => {
+    const view = wysiwygView();
+    if (view?.__proserHistory) {
+      try {
+        view.dispatch(pmCloseHistory(view.state.tr));
+      } catch {
+        /* ignore */
+      }
+    }
+  }, 0);
+}
+
+/** Run the editor's own undo/redo, keeping the write in sync with the host.
+ *  Pretty mode drives our ProseMirror history; Markdown mode uses CodeMirror's
+ *  via Toast's command. */
+function runHistory(dir: 'undo' | 'redo'): void {
+  userTyping = true; // let the resulting change post an edit to the host
+  const view = currentMode === 'pretty' ? wysiwygView() : null;
+  if (view?.__proserHistory) {
+    (dir === 'undo' ? pmUndo : pmRedo)(view.state, view.dispatch);
+  } else if (typeof editor?.exec === 'function') {
+    editor.exec(dir);
+  }
 }
 
 /** Runs `fn` without letting the resulting Toast 'change' post an edit (used
@@ -110,6 +196,7 @@ function setMode(mode: 'pretty' | 'markdown'): void {
   // The editable DOM is rebuilt — re-assert spellcheck and restore the position.
   setTimeout(() => {
     applySpellcheck(spellcheckOn);
+    installProseHistory(); // WYSIWYG view was recreated — reinstall our history
     const after = scrollableEditorEl();
     if (after && after.scrollHeight > after.clientHeight) {
       after.scrollTop = ratio * (after.scrollHeight - after.clientHeight);
@@ -202,6 +289,33 @@ function toggleSpellcheck(): void {
   vscode.postMessage({ type: 'toggleSpellcheck', enabled: spellcheckOn });
 }
 
+// Grammar is an independent toggle (its own `proser.checks.grammar`), a peer of
+// Spelling — either can be on without the other.
+let grammarOn = true;
+
+/** The Grammar toggle is the master switch for ALL non-spelling suggestion
+ *  underlines — grammar, tense, passive, punctuation, spacing — so flipping it
+ *  shows/hides every one of them at once (spelling has its own toggle). */
+function applyGrammar(on: boolean): void {
+  grammarOn = on;
+  const btn = $('grammarToggle');
+  if (btn) {
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  paintGrammar();
+  paintTense();
+  paintPassive();
+  paintSpacing();
+  paintQuotePunct();
+}
+
+/** User flipped the toggle: update this view and tell the host to flip the setting. */
+function toggleGrammar(): void {
+  applyGrammar(!grammarOn);
+  vscode.postMessage({ type: 'toggleGrammar', enabled: grammarOn });
+}
+
 function changeFont(delta: number): void {
   const next = Math.max(12, Math.min(28, fontSize + delta));
   if (next !== fontSize) {
@@ -219,6 +333,30 @@ function abToBase64(buf: ArrayBuffer): string {
   return btoa(bin);
 }
 
+/** True if one horizontal RGBA pixel row is near-white edge to edge (the gap
+ *  between two lines of text). Anti-aliased fringes read ≥246, so those gaps
+ *  still qualify; any glyph, border, or image pixel does not. */
+function isBlankRow(data: Uint8ClampedArray, width: number, row: number): boolean {
+  const start = row * width * 4;
+  for (let x = 0; x < width; x += 2) {
+    const i = start + x * 4;
+    if (data[i] < 246 || data[i + 1] < 246 || data[i + 2] < 246) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Index of the bottom-most blank row in an RGBA block, or -1 if none. */
+function lastBlankRow(data: Uint8ClampedArray, width: number, rows: number): number {
+  for (let row = rows - 1; row >= 0; row--) {
+    if (isBlankRow(data, width, row)) {
+      return row;
+    }
+  }
+  return -1;
+}
+
 async function exportPdf(): Promise<void> {
   if (!editor) {
     return;
@@ -226,7 +364,9 @@ async function exportPdf(): Promise<void> {
   const container = document.createElement('div');
   container.id = 'proser-pdf-export';
   container.className = 'toastui-editor-contents';
-  container.style.cssText = 'padding:28px;width:800px;';
+  // Sized to the PDF's printable area — A4 (210×297mm) minus the 10mm margins
+  // used below — so the capture maps onto the page with no horizontal clipping.
+  container.style.cssText = 'box-sizing:border-box;width:190mm;padding:28px;';
   container.innerHTML = editor.getHTML();
 
   // Force black-on-white for print — beats the id-less theme overrides
@@ -243,16 +383,99 @@ async function exportPdf(): Promise<void> {
   document.head.appendChild(style);
   document.body.appendChild(container);
   try {
-    const opts = {
-      margin: 10,
-      image: { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, backgroundColor: '#ffffff' },
-      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    const INNER_W_MM = 190; // A4 210mm − 2×10mm margins
+    const INNER_H_MM = 277; // A4 297mm − 2×10mm margins
+    const MARGIN_MM = 10;
+    // Chromium cannot allocate a canvas taller than ~32,700px — past that the
+    // capture silently comes back empty and pages go blank. At 2× the cap is
+    // only ~15 A4 pages, so on long chapters drop the quality scale just
+    // enough to fit.
+    const scale = Math.min(2, 31500 / Math.max(1, container.scrollHeight));
+    const canvas = await html2canvas(container, {
+      scale,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      // Must exceed the 190mm (~719px) container or a narrow editor pane
+      // clips the right edge (defaults to the webview's innerWidth).
+      windowWidth: 900,
+      scrollX: 0,
+      scrollY: 0
+    });
+    const srcCtx = canvas.getContext('2d');
+    if (!srcCtx) {
+      throw new Error('Could not read the rendered page image.');
+    }
+
+    // Slice the tall capture into A4 pages ourselves. html2pdf's slicer cuts
+    // at a computed offset that drifts from any page-break plan and shears
+    // lines of text in half. Instead: nominal cut = one printable page down,
+    // then walk upward (up to half a page, in small chunks) to the nearest
+    // fully white pixel row, so every page break falls in the gap between
+    // lines — like a typeset book — never through a line.
+    const pxPerMm = canvas.width / INNER_W_MM;
+    const pageH = Math.floor(INNER_H_MM * pxPerMm);
+    const findCut = (nominal: number): number => {
+      const limit = Math.max(0, nominal - Math.floor(pageH / 2));
+      let lo = nominal;
+      while (lo > limit) {
+        const h = Math.min(128, lo - limit);
+        const block = srcCtx.getImageData(0, lo - h, canvas.width, h);
+        const blank = lastBlankRow(block.data, canvas.width, h);
+        if (blank >= 0) {
+          return lo - h + blank;
+        }
+        lo -= h;
+      }
+      return nominal; // half a page of solid ink (e.g. a large image): hard cut
     };
-    const buf: ArrayBuffer = await (html2pdf() as any)
-      .set(opts)
-      .from(container)
-      .outputPdf('arraybuffer');
+    const regionHasInk = (top: number, height: number): boolean => {
+      const block = srcCtx.getImageData(0, top, canvas.width, height);
+      for (let row = 0; row < height; row++) {
+        if (!isBlankRow(block.data, canvas.width, row)) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const pageCanvas = document.createElement('canvas');
+    const pageCtx = pageCanvas.getContext('2d');
+    if (!pageCtx) {
+      throw new Error('Could not compose PDF pages.');
+    }
+    pageCanvas.width = canvas.width;
+
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    let top = 0;
+    let firstPage = true;
+    while (top < canvas.height) {
+      let cut = Math.min(top + pageH, canvas.height);
+      if (cut < canvas.height) {
+        cut = findCut(cut);
+      } else if (!firstPage && !regionHasInk(top, cut - top)) {
+        break; // don't emit a trailing all-white page
+      }
+      const sliceH = cut - top;
+      pageCanvas.height = sliceH;
+      pageCtx.fillStyle = '#ffffff';
+      pageCtx.fillRect(0, 0, pageCanvas.width, sliceH);
+      pageCtx.drawImage(canvas, 0, top, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+      if (!firstPage) {
+        pdf.addPage();
+      }
+      firstPage = false;
+      pdf.addImage(
+        pageCanvas.toDataURL('image/jpeg', 0.98),
+        'JPEG',
+        MARGIN_MM,
+        MARGIN_MM,
+        INNER_W_MM,
+        sliceH / pxPerMm
+      );
+      top = cut;
+    }
+
+    const buf: ArrayBuffer = pdf.output('arraybuffer');
     vscode.postMessage({ type: 'exportPdf', data: abToBase64(buf), filename: exportFilename });
   } catch (err) {
     vscode.postMessage({ type: 'exportError', message: String((err as Error)?.message ?? err) });
@@ -402,8 +625,9 @@ function setAiBusy(tag: string, on: boolean): void {
     applyAiBusyClasses(el);
   }
 }
-// Footer text load-state + VRAM, beside the model chip.
-function renderModelState(s: { status: string; vramGb: number }): void {
+// Footer text load-state + memory, beside the model chip. Shows Ollama's loaded
+// model-weight size and, when we can read it, the real process RAM alongside it.
+function renderModelState(s: { status: string; vramGb: number; ramGb?: number }): void {
   const st = $('aiState');
   const vr = $('aiVram');
   if (st) {
@@ -419,8 +643,13 @@ function renderModelState(s: { status: string; vramGb: number }): void {
   }
   if (vr) {
     const show = s.status !== 'off' && s.vramGb > 0;
-    vr.textContent = show ? `${s.vramGb} GB VRAM` : '';
-    vr.title = show ? 'GPU / unified memory the loaded model is using' : '';
+    const hasRam = show && typeof s.ramGb === 'number' && s.ramGb > 0;
+    vr.textContent = !show ? '' : hasRam ? `${s.vramGb} GB model · ${s.ramGb} GB RAM` : `${s.vramGb} GB VRAM`;
+    vr.title = !show
+      ? ''
+      : hasRam
+        ? 'model = weights Ollama loaded · RAM = actual process memory (matches Activity Monitor)'
+        : 'GPU / unified memory the loaded model is using';
   }
 }
 
@@ -635,6 +864,7 @@ function hideAll(): void {
   hideMenu();
   hideSuggestions();
   hideRevise();
+  hideTenseMenu();
 }
 
 /** Replaces the original selection with `text` (a synonym or a revision). Reads
@@ -972,8 +1202,11 @@ document.addEventListener('keydown', (e) => {
 window.addEventListener('blur', hideMenu);
 
 function initEditor(fullText: string): void {
-  const { fm, body } = splitFrontmatter(fullText);
-  frontmatter = fm;
+  const head = splitHead(fullText);
+  frontmatter = head.frontmatter;
+  proserMeta = head.proserMeta;
+  const body = head.body;
+  updateTenseButton();
   const opts = {
     el: $('editor'),
     initialEditType: 'wysiwyg',
@@ -1013,7 +1246,14 @@ function initEditor(fullText: string): void {
   // fire 'input', so they never set this.
   const editorEl = $('editor');
   if (editorEl) {
-    editorEl.addEventListener('input', () => (userTyping = true), true);
+    editorEl.addEventListener(
+      'input',
+      (e) => {
+        userTyping = true;
+        sealWordAfterInput(e as InputEvent); // seal each word so Ctrl+Z is per-word
+      },
+      true
+    );
     editorEl.addEventListener('input', autoEmDash, true); // "--" → "—" (third dash reverts)
     editorEl.addEventListener('paste', () => (userTyping = true), true);
     // Live "N words selected" footer. selectionchange covers the WYSIWYG
@@ -1071,7 +1311,7 @@ function initEditor(fullText: string): void {
         }
 
         // Grammar next: right-click on a flagged phrase → its reason + one-click fix.
-        if (spellcheckOn && grammarRanges.length > 0) {
+        if (grammarOn && grammarRanges.length > 0) {
           const hit = grammarHitAtPoint(e.clientX, e.clientY);
           if (hit) {
             e.preventDefault();
@@ -1142,8 +1382,8 @@ function initEditor(fullText: string): void {
         }
 
         // Quotation punctuation: right-click the flagged quote + period/comma → the
-        // style rule + a one-click swap. Deterministic, so it's always available when on.
-        if (quotePunctuationStyle !== 'off') {
+        // style rule + a one-click swap. Available only while suggestions (Grammar) are on.
+        if (grammarOn && quotePunctuationStyle !== 'off') {
           const hit = quotePunctHitAtPoint(e.clientX, e.clientY);
           if (hit) {
             e.preventDefault();
@@ -1166,8 +1406,8 @@ function initEditor(fullText: string): void {
         }
 
         // Sentence spacing: right-click the flagged gap (or the period when a space is
-        // missing) → the rule + a one-click normalize to the configured spacing.
-        {
+        // missing) → the rule + a one-click normalize. Only while suggestions (Grammar) are on.
+        if (grammarOn) {
           const hit = spacingHitAtPoint(e.clientX, e.clientY);
           if (hit) {
             e.preventDefault();
@@ -1249,6 +1489,7 @@ function initEditor(fullText: string): void {
   });
 
   applySpellcheck(spellcheckOn); // ProseMirror nodes exist now — set the attribute
+  installProseHistory(); // our own undo stack, per-word grouping
 
   // The document is now rendered and visible. Tell the host it can START its checks
   // (spell / grammar / tense) — nothing runs before this, so opening a file never
@@ -1268,7 +1509,7 @@ onHostMessage<HostToWebviewType>({
     if (!editor) {
       initEditor(fullText);
     } else if (fullText !== currentMarkdown()) {
-      const { fm, body } = splitFrontmatter(fullText);
+      const { frontmatter: fm, proserMeta: pm, body } = splitHead(fullText);
       // setMarkdown rebuilds the document and resets cursor + scroll (so undo/redo,
       // which re-pushes the whole text, jumped to the end). Capture where we are and
       // restore it after Toast UI re-renders — same pattern as setMode().
@@ -1285,6 +1526,8 @@ onHostMessage<HostToWebviewType>({
       }
       applyingRemote = true;
       frontmatter = fm;
+      proserMeta = pm;
+      updateTenseButton();
       try {
         editor.setMarkdown(blockifyComments(body), false);
       } catch {
@@ -1416,7 +1659,11 @@ onHostMessage<HostToWebviewType>({
     setAiBusy(typeof msg.tag === 'string' ? msg.tag : '', !!msg.on);
   },
   aiModelState: (msg) => {
-    renderModelState({ status: String(msg.status ?? 'off'), vramGb: Number(msg.vramGb) || 0 });
+    renderModelState({
+      status: String(msg.status ?? 'off'),
+      vramGb: Number(msg.vramGb) || 0,
+      ramGb: Number(msg.ramGb) || undefined
+    });
   },
   config: (msg) => {
     if (msg.filename) {
@@ -1430,6 +1677,9 @@ onHostMessage<HostToWebviewType>({
     }
     if (typeof msg.spellcheckEnabled === 'boolean') {
       applySpellcheck(msg.spellcheckEnabled);
+    }
+    if (typeof msg.grammarEnabled === 'boolean') {
+      applyGrammar(msg.grammarEnabled);
     }
     if (typeof msg.sentenceSpacing === 'number') {
       sentenceSpacing = msg.sentenceSpacing;
@@ -1688,6 +1938,41 @@ document.addEventListener(
   true
 );
 
+// Undo / redo — Mod+Z, Shift+Mod+Z, Ctrl+Y. Route to the editor's OWN history and
+// stopPropagation (capture phase) so VS Code's TextDocument undo can't ALSO fire —
+// the double-undo that made Ctrl+Z remove several steps or feel dead. `Mod` covers
+// Cmd (macOS) and Ctrl (Win/Linux). Only while editing the document, so the Find /
+// Revise inputs keep their native undo.
+document.addEventListener(
+  'keydown',
+  (e) => {
+    if (!editor || e.altKey) {
+      return;
+    }
+    if (!(e.metaKey || e.ctrlKey)) {
+      return;
+    }
+    const key = e.key.toLowerCase();
+    let dir: 'undo' | 'redo' | null = null;
+    if (key === 'z') {
+      dir = e.shiftKey ? 'redo' : 'undo';
+    } else if (key === 'y' && !e.shiftKey) {
+      dir = 'redo';
+    }
+    if (!dir) {
+      return;
+    }
+    const wrap = $('editor');
+    if (wrap && !wrap.contains(e.target as Node)) {
+      return; // let the Find / Revise inputs undo themselves
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    runHistory(dir);
+  },
+  true
+);
+
 // ---- Reveal a passage (the sidebar checker's "Go") ----
 // The host posts a sentence; we scroll to it and flash a highlight — reusing the
 // Find matcher + CSS Highlight API. Queued until the editor content is ready.
@@ -1787,10 +2072,10 @@ function scheduleRepaintSpell(): void {
   }, 150);
 }
 
-// ---- Inline grammar squiggles (AI proofread; a SECOND highlight color) ----
+// ---- Inline grammar squiggles (Harper grammar; a SECOND highlight color) ----
 // Same CSS-Highlight approach as spelling, but a distinct color. Each finding is a
 // {phrase, message, fix}; we underline its first occurrence and offer the fix on
-// right-click. Detection comes from the host's AI proofread pass (debounced/cached).
+// right-click. Detection comes from the host's Harper grammar pass (debounced/cached).
 interface GrammarFinding {
   phrase: string;
   message: string;
@@ -1834,7 +2119,7 @@ function paintGrammar(): void {
   const reg = (CSS as any).highlights as Map<string, unknown>;
   reg.delete('proser-grammar');
   grammarRanges = [];
-  if (!spellcheckOn || grammarFindings.length === 0) {
+  if (!grammarOn || grammarFindings.length === 0) {
     return;
   }
   grammarRanges = collectGrammarRanges();
@@ -1910,6 +2195,9 @@ function paintSpacing(): void {
   }
   const reg = (CSS as any).highlights as Map<string, unknown>;
   reg.delete('proser-spacing');
+  if (!grammarOn) {
+    return;
+  }
   const ranges = collectSpacingRanges();
   if (ranges.length) {
     reg.set('proser-spacing', new (window as any).Highlight(...ranges));
@@ -2001,7 +2289,7 @@ function paintQuotePunct(): void {
   }
   const reg = (CSS as any).highlights as Map<string, unknown>;
   reg.delete('proser-quote');
-  if (quotePunctuationStyle === 'off') {
+  if (!grammarOn || quotePunctuationStyle === 'off') {
     return;
   }
   const ranges = collectQuotePunctRanges();
@@ -2134,7 +2422,7 @@ function paintPassive(): void {
   const reg = (CSS as any).highlights as Map<string, unknown>;
   reg.delete('proser-passive');
   passiveRanges = [];
-  if (!passiveOn || passiveFindings.length === 0) {
+  if (!grammarOn || !passiveOn || passiveFindings.length === 0) {
     return;
   }
   passiveRanges = collectPassiveRanges();
@@ -2212,7 +2500,7 @@ function paintTense(): void {
   const reg = (CSS as any).highlights as Map<string, unknown>;
   reg.delete('proser-tense');
   tenseRanges = [];
-  if (!tenseOn || tenseFindings.length === 0) {
+  if (!grammarOn || !tenseOn || tenseFindings.length === 0) {
     return;
   }
   tenseRanges = collectTenseRanges();
@@ -2375,7 +2663,7 @@ function appendSpellAiSuggestions(word: string, words: string[]): void {
 }
 
 /** Anchored card for a grammar / word-choice error: the reason + a one-click fix
- *  (replaces the flagged phrase with the AI's correction). */
+ *  (replaces the flagged phrase with Harper's correction). */
 function showGrammarCard(finding: GrammarFinding): void {
   hideSuggestions();
   const card = el('div');
@@ -2515,11 +2803,110 @@ function showTenseCard(finding: TenseFinding): void {
   positionCard(card, pendingRect);
 }
 
+// ---- Per-chapter tense override (clock icon → in-editor dropdown) ----
+// The choice lives in the hidden head comment (proserMeta); picking one edits the
+// document so the host re-runs its tense pass pinned to that tense.
+let tenseMenuCard: HTMLElement | undefined;
+
+function hideTenseMenu(): void {
+  if (tenseMenuCard) {
+    tenseMenuCard.remove();
+    tenseMenuCard = undefined;
+  }
+}
+
+/** The chapter's current override parsed from the hidden head comment (null = Auto). */
+function currentTenseOverride(): TenseOverride | null {
+  return readTenseOverride(proserMeta);
+}
+
+/** Reflects the override on the clock button: active fill + a label when pinned. */
+function updateTenseButton(): void {
+  const btn = $('tenseBtn');
+  if (!btn) {
+    return;
+  }
+  const cur = currentTenseOverride();
+  btn.classList.toggle('active', cur !== null);
+  const lbl = btn.querySelector('.lbl');
+  if (lbl) {
+    lbl.textContent = cur ? 'Tense: ' + cur[0].toUpperCase() + cur.slice(1) : 'Tense';
+  }
+  btn.setAttribute(
+    'title',
+    cur
+      ? `Narrative tense for this chapter: ${cur} (click to change)`
+      : 'Narrative tense: Auto (click to override for this chapter)'
+  );
+}
+
+/** Sets (or clears, for Auto) the override and writes it into the document head so
+ *  the host's tense pass re-runs against the chosen tense. */
+function setTenseOverride(tense: TenseOverride | null): void {
+  proserMeta = formatTenseComment(tense);
+  updateTenseButton();
+  hideTenseMenu();
+  userTyping = true; // a genuine document change — let it sync to the file
+  const md = currentMarkdown();
+  lastSent = md;
+  vscode.postMessage({ type: 'edit', text: md });
+}
+
+/** Opens the anchored Auto / Past / Present / Future menu under the clock button. */
+function showTenseMenu(): void {
+  hideAll();
+  const btn = $('tenseBtn');
+  if (!btn) {
+    return;
+  }
+  const cur = currentTenseOverride();
+  const card = el('div');
+  card.id = 'proser-suggest'; // reuse the popup card styling
+  card.addEventListener('mousedown', (e) => e.preventDefault());
+  card.appendChild(el('div', 'psg-title', 'Narrative tense'));
+  const opts = el('div', 'psg-options');
+  const choices: Array<{ label: string; value: TenseOverride | null }> = [
+    { label: 'Auto (global default)', value: null },
+    { label: 'Past', value: 'past' },
+    { label: 'Present', value: 'present' },
+    { label: 'Future', value: 'future' }
+  ];
+  for (const c of choices) {
+    const b = el('button', 'psg-opt', (c.value === cur ? '✓  ' : '') + c.label);
+    b.addEventListener('click', () => setTenseOverride(c.value));
+    opts.appendChild(b);
+  }
+  card.appendChild(opts);
+  document.body.appendChild(card);
+  tenseMenuCard = card;
+  positionCard(card, btn.getBoundingClientRect());
+}
+
+// Close the menu on any outside press (clicking the clock itself toggles it below).
+document.addEventListener('mousedown', (e) => {
+  if (!tenseMenuCard) {
+    return;
+  }
+  const t = e.target as Node;
+  if (tenseMenuCard.contains(t) || $('tenseBtn')?.contains(t)) {
+    return;
+  }
+  hideTenseMenu();
+});
+
 // Wire toolbar controls.
 document.querySelectorAll('#modeToggle button').forEach((b) => {
   b.addEventListener('click', () => setMode((b as HTMLElement).dataset.mode as any));
 });
 $('spellToggle')?.addEventListener('click', toggleSpellcheck);
+$('grammarToggle')?.addEventListener('click', toggleGrammar);
+$('tenseBtn')?.addEventListener('click', () => {
+  if (tenseMenuCard) {
+    hideTenseMenu();
+  } else {
+    showTenseMenu();
+  }
+});
 $('fontMinus')?.addEventListener('click', () => changeFont(-1));
 $('fontPlus')?.addEventListener('click', () => changeFont(1));
 $('issuesBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'showIssues' }));

@@ -212,26 +212,40 @@ export async function resolveCorpus(root: vscode.Uri): Promise<ChapterFile[]> {
  *  the navigator shouldn't hide the author's own files). */
 export async function listStoryFiles(root: vscode.Uri): Promise<vscode.Uri[]> {
   const exclude = referenceExcludeSet();
-  let uris: vscode.Uri[];
-  try {
-    uris = await vscode.workspace.findFiles(
-      new vscode.RelativePattern(root, '**/*.md'),
-      '{**/node_modules/**,**/.git/**,**/.proser/**}',
-      5000
-    );
-  } catch {
-    return [];
-  }
-  const rootPath = root.path.replace(/\/+$/, '');
-  return uris
-    .map((uri) => {
-      const file = uri.path.split('/').pop() ?? '';
-      const rel = uri.path.startsWith(rootPath + '/') ? uri.path.slice(rootPath.length + 1) : file;
-      return { uri, rel };
-    })
-    .filter((e) => !relIsReference(e.rel, exclude))
-    .sort((a, b) => a.rel.localeCompare(b.rel, 'en'))
-    .map((e) => e.uri);
+  const SKIP_DIRS = new Set(['node_modules', '.git', '.proser']);
+  const MAX_DEPTH = 8; // manuscripts are shallow; guards against pathological deep trees
+  const MAX_FILES = 5000; // parity with the old findFiles cap — bound a runaway walk
+  const out: Array<{ uri: vscode.Uri; rel: string }> = [];
+  // Direct recursive FS walk — NOT vscode.workspace.findFiles. findFiles reads the
+  // editor's search index, which lags behind disk changes, so a chapter added in the
+  // Explorer wouldn't show in the navigator until the index caught up (often minutes).
+  // readDirectory is always current, so a refresh reflects the folder immediately.
+  const walk = async (dir: vscode.Uri, prefix: string, depth: number): Promise<void> => {
+    if (depth > MAX_DEPTH || out.length >= MAX_FILES) {
+      return;
+    }
+    let entries: [string, vscode.FileType][];
+    try {
+      entries = await vscode.workspace.fs.readDirectory(dir);
+    } catch {
+      return; // unreadable folder — skip
+    }
+    for (const [name, type] of entries) {
+      if (out.length >= MAX_FILES) {
+        break;
+      }
+      const rel = prefix ? `${prefix}/${name}` : name;
+      if (type === vscode.FileType.Directory) {
+        if (!SKIP_DIRS.has(name)) {
+          await walk(vscode.Uri.joinPath(dir, name), rel, depth + 1);
+        }
+      } else if (type === vscode.FileType.File && /\.md$/i.test(name) && !relIsReference(rel, exclude)) {
+        out.push({ uri: vscode.Uri.joinPath(dir, name), rel });
+      }
+    }
+  };
+  await walk(root, '', 0);
+  return out.sort((a, b) => a.rel.localeCompare(b.rel, 'en')).map((e) => e.uri);
 }
 
 /** Token-safe slug for a chapter from its story-root-relative path. Not

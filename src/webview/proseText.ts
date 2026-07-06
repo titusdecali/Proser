@@ -8,6 +8,40 @@ export function splitFrontmatter(text: string): { fm: string; body: string } {
   return m ? { fm: m[1], body: text.slice(m[1].length) } : { fm: '', body: text };
 }
 
+const FRONTMATTER_HEAD_RE = /^---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n?/;
+const PROSER_META_HEAD_RE = /^[ \t]*<!--\s*proser:[a-z]+=[^>]*?-->[ \t]*\r?\n?/i;
+
+/** Splits the hidden "head" — YAML frontmatter and/or a leading Proser metadata
+ *  comment (e.g. `<!-- proser:tense=present -->`), in any order — off the top so the
+ *  Pretty view renders only the body and never mangles either. Both are preserved
+ *  byte-for-byte and re-emitted by {@link joinHead}. */
+export function splitHead(text: string): { frontmatter: string; proserMeta: string; body: string } {
+  // Frontmatter is only valid at the very top (YAML must lead the file), so peel it
+  // FIRST and only there, THEN a leading Proser comment. We deliberately do NOT look
+  // for frontmatter *after* a comment: a body that opens with a `---…---` thematic
+  // break would otherwise be misread as frontmatter and vanish from the Pretty view.
+  let rest = text;
+  let frontmatter = '';
+  const fm = FRONTMATTER_HEAD_RE.exec(rest);
+  if (fm) {
+    frontmatter = fm[0];
+    rest = rest.slice(fm[0].length);
+  }
+  let proserMeta = '';
+  const pm = PROSER_META_HEAD_RE.exec(rest);
+  if (pm) {
+    proserMeta = pm[0];
+    rest = rest.slice(pm[0].length);
+  }
+  return { frontmatter, proserMeta, body: rest };
+}
+
+/** Reassembles a document from its split head + body: frontmatter first (YAML must
+ *  lead the file), then the Proser metadata comment, then the editable body. */
+export function joinHead(frontmatter: string, proserMeta: string, body: string): string {
+  return frontmatter + proserMeta + body;
+}
+
 /** Toast UI's WYSIWYG conversion blanks the whole document on an *inline* HTML
  *  comment (one mid-paragraph), and an *unterminated* comment (`<!--` with no
  *  closing `-->`) makes it swallow the entire rest of the document — so the

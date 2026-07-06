@@ -10,8 +10,15 @@ import { editTitlePage, insertChapter, insertDivider, insertSceneBreak } from '.
 import { MANUSCRIPT_VIEW_ID, ManuscriptSidebar } from './sidebar';
 import { SpellService } from '../spellcheck/spellService';
 
+/** Keeps Unicode titles (Korean, Japanese, …) intact — only strips characters
+ *  that are invalid in file names on Windows/macOS/Linux. */
 function safeName(title: string): string {
-  return (title || 'Manuscript').replace(/[^A-Za-z0-9 _-]+/g, '').trim() || 'Manuscript';
+  return (
+    (title || 'Manuscript')
+      .replace(/[\\/:*?"<>|]+/g, '')
+      .replace(/\.+$/, '')
+      .trim() || 'Manuscript'
+  );
 }
 
 type Scope = 'active' | 'folder';

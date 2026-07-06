@@ -1,3 +1,5 @@
+import * as os from 'os';
+import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import { ConfigKeys, EXTENSION_ID } from '../../constants';
 import { fetchWithTimeout } from '../../util/fetchTimeout';
@@ -9,6 +11,13 @@ import { onAiActivity } from './aiActivity';
  * models and each one's GPU/unified-memory footprint) and broadcasts changes, plus
  * re-checks instantly whenever AI work starts/stops so "Loading Model…" appears the
  * moment a cold model begins loading and flips to "Model Ready" once it's resident.
+ *
+ * Ollama's `/api/ps` reports only the model's *loaded weight* footprint (for
+ * `gemma4:e4b` that's ~3 GB — the "effective" active submodel), which badly
+ * undercounts what the OS actually gives the `llama-server` runner (the full
+ * mmapped weights + KV cache + Metal buffers, ~10 GB in Activity Monitor). So we
+ * ALSO read the runner process's real resident memory (RSS) via `ps` and surface
+ * both: the model-weight number from Ollama plus the true process RAM.
  */
 export type ModelStatus = 'off' | 'idle' | 'loading' | 'ready';
 
@@ -16,8 +25,12 @@ export interface ModelState {
   status: ModelStatus;
   /** Short model name for display ('' when AI is off). */
   label: string;
-  /** Resident GPU/unified memory of the loaded model(s), in GB (0 when none). */
+  /** Ollama-reported loaded-weight footprint of the model(s), in GB (0 when none). */
   vramGb: number;
+  /** Real RSS of the local `llama-server`/runner process(es), in GB. `undefined`
+   *  when it can't be read (remote endpoint, Windows, or no runner found) — the
+   *  footer then shows just {@link vramGb}. */
+  ramGb?: number;
 }
 
 const GB = 1024 * 1024 * 1024;
@@ -47,6 +60,65 @@ function normModel(s: string): string {
   return (s || '').trim().replace(/:latest$/i, '');
 }
 
+/** True when `endpoint` points at this machine, so its runner process is one we
+ *  can actually inspect with `ps` (a remote Ollama can't be). */
+function isLocalEndpoint(endpoint: string): boolean {
+  let host = '';
+  try {
+    host = new URL(endpoint).hostname;
+  } catch {
+    return false;
+  }
+  return host === '' || host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+}
+
+/** Matches an Ollama inference runner's command line — the standalone
+ *  `llama-server`/`llama_server` binary (macOS app bundle, older Linux) or the
+ *  newer `ollama runner` subprocess — while NOT matching the tiny `ollama serve`
+ *  parent (it has neither token). */
+const RUNNER_RE = /llama[-_]server|\bollama\b.*\brunner\b/i;
+
+/**
+ * Real resident memory (RSS, in GB) of the local Ollama runner process(es) — the
+ * number that actually shows up next to `llama-server` in Activity Monitor, which
+ * Ollama's `/api/ps` badly undercounts. Reads `ps` on macOS/Linux; resolves
+ * `undefined` for a remote endpoint, on Windows, or if no runner is found (the
+ * caller then falls back to the Ollama weight number).
+ *
+ * Caveat: `ps rss` approximates Activity Monitor's "Memory" (phys_footprint) — the
+ * same ballpark, but not identical, since macOS counts compressed/wired/GPU memory
+ * differently. Still far closer than Ollama's ~3 GB estimate.
+ */
+function readModelRssGb(endpoint: string): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    if (!isLocalEndpoint(endpoint) || (os.platform() !== 'darwin' && os.platform() !== 'linux')) {
+      resolve(undefined);
+      return;
+    }
+    try {
+      execFile('ps', ['-Ao', 'rss=,command='], { timeout: 2000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+        if (err || !stdout) {
+          resolve(undefined);
+          return;
+        }
+        let rssKb = 0;
+        let matched = false;
+        for (const line of stdout.split(/\r?\n/)) {
+          const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+          if (!m || !RUNNER_RE.test(m[2])) {
+            continue;
+          }
+          rssKb += parseInt(m[1], 10);
+          matched = true;
+        }
+        resolve(matched ? Math.round((rssKb * 1024) / GB * 10) / 10 : undefined);
+      });
+    } catch {
+      resolve(undefined);
+    }
+  });
+}
+
 async function poll(): Promise<void> {
   let next: ModelState;
   if (cfg().get<string>(ConfigKeys.aiEngine, 'off') !== 'ollama') {
@@ -70,13 +142,20 @@ async function poll(): Promise<void> {
       const vramBytes = models.reduce((sum, m) => sum + (m.size_vram ?? m.size ?? 0), 0);
       const vramGb = Math.round((vramBytes / GB) * 10) / 10;
       const status: ModelStatus = resident ? 'ready' : busyCount > 0 ? 'loading' : 'idle';
-      next = { status, label, vramGb };
+      // Real process RAM, but only when there's actually a runner loaded to read.
+      const ramGb = models.length ? await readModelRssGb(endpoint) : undefined;
+      next = { status, label, vramGb, ramGb };
     } catch {
       // Ollama unreachable: a request in flight means it's spinning up, else it's off.
       next = { status: busyCount > 0 ? 'loading' : 'off', label, vramGb: 0 };
     }
   }
-  if (next.status !== last.status || next.label !== last.label || next.vramGb !== last.vramGb) {
+  if (
+    next.status !== last.status ||
+    next.label !== last.label ||
+    next.vramGb !== last.vramGb ||
+    next.ramGb !== last.ramGb
+  ) {
     last = next;
     emitter.fire(next);
   }

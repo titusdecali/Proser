@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ConfigKeys, EXTENSION_ID } from '../../constants';
 import { AiClient } from './AiClient';
 import { OpenRouterClient } from './openRouterClient';
-import { OllamaClient, unloadOtherModels } from './ollamaClient';
+import { OllamaClient, unloadOtherModels, preloadModel } from './ollamaClient';
 import { SecretStore } from './secretStore';
 import { pickLocalModel } from './localModelPicker';
 import { LOCAL_MODELS, detectMemoryProfile, editorFitsWithHelper, localModelInfo } from './ramAdvisor';
@@ -180,6 +180,25 @@ const LEGACY_HELPER_ENDPOINT = 'http://127.0.0.1:11435';
  * every model/engine change so a stray model can't sit beside ours and OOM the
  * machine. No-op for cloud/off engines or a remote endpoint (nothing local to manage).
  */
+/**
+ * Pre-loads the editor model into Ollama so the first on-demand lookup (synonyms,
+ * inline spell) isn't a cold load that overruns the timeout and falls back to the
+ * dictionary. Fire-and-forget; only for the local Ollama engine, and skipped while a
+ * heavy foreground generation (Brainstorm/Revise/Story Memory) owns the single model.
+ */
+export async function warmModel(): Promise<void> {
+  const cfg = config();
+  if (cfg.get<EngineKind>(ConfigKeys.aiEngine, 'off') !== 'ollama') {
+    return; // nothing local to warm (cloud/off use no resident model)
+  }
+  if (isHeavyAiBusy()) {
+    return; // don't fight a foreground generation for the single model
+  }
+  const endpoint = cfg.get<string>(ConfigKeys.aiOllamaEndpoint, 'http://localhost:11434');
+  const model = cfg.get<string>(ConfigKeys.aiOllamaModel, 'gemma4:e4b').trim();
+  await preloadModel(endpoint, model);
+}
+
 export async function enforceSingleLoadedModel(): Promise<void> {
   const cfg = config();
   if (cfg.get<EngineKind>(ConfigKeys.aiEngine, 'off') === 'off') {

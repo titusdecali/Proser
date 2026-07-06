@@ -2,6 +2,40 @@
 
 All notable changes to Proser are documented here.
 
+## [1.4.39]
+
+### Fixed
+- **Quick PDF export no longer cuts off text — rebuilt pagination.** The
+  "PDF — Quick (current styled view)" export had several capture bugs:
+  - The page rendered wider than the printable A4 area, clipping the last
+    characters of every line (and narrow editor panes could clip it further).
+  - Page breaks sliced straight through a line of text. The old html2pdf
+    engine cut pages at computed offsets that drift out of alignment; the
+    export now finds the actual white gap between lines and breaks there,
+    like a typeset book — this also keeps images in one piece.
+  - Chapters longer than ~15 pages came out blank past a point (the capture
+    exceeded the browser's canvas size limit); the export now trades a little
+    sharpness for completeness on very long chapters.
+  - Embedded images could render blank.
+
+## [1.4.36]
+
+### Added
+- **Korean, Japanese, and Chinese in PDF manuscript export.** The PDF exporter
+  previously used the PDF built-in Courier fonts, which only cover Latin-1 —
+  Hangul, kana, and hanzi/kanji came out as garbage. Proser now bundles
+  Noto Sans Mono CJK (SIL Open Font License), and any CJK text in your
+  manuscript — body, chapter titles, part dividers, the title page, and the
+  running header — is rendered with it automatically, while Latin text keeps
+  the standard Courier manuscript look. The font is subset on export, so PDFs
+  stay small.
+
+### Fixed
+- **Non-English titles survive in export file names.** Previously every
+  non-ASCII character was stripped from the suggested file name, so a Korean
+  or Japanese title exported as "Manuscript.pdf". Now only characters that are
+  invalid in file names are removed.
+
 ## [1.4.24]
 
 ### Added

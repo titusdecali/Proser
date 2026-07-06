@@ -36,6 +36,7 @@ export type WebviewToHostType =
   | 'edit'
   | 'save'
   | 'toggleSpellcheck'
+  | 'toggleGrammar'
   | 'setFontSize'
   | 'exportPdf'
   | 'exportError'

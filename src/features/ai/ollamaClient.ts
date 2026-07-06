@@ -329,3 +329,30 @@ export async function unloadOtherModels(endpoint: string, keepTag: string): Prom
       )
   );
 }
+
+/**
+ * Warms a model: asks Ollama to LOAD it into memory (no prompt → no generation) and
+ * sets the keep-alive window, so the next real request (synonyms, inline spell, …)
+ * hits a resident model instead of paying a 15–40s cold load that times out and falls
+ * back to the dictionary. Best-effort and fire-and-forget; the long timeout covers a
+ * genuine cold load. No-op if Ollama is unreachable.
+ */
+export async function preloadModel(endpoint: string, model: string): Promise<void> {
+  if (!model) {
+    return;
+  }
+  const base = endpoint.replace(/\/$/, '');
+  try {
+    await fetchWithTimeout(
+      `${base}/api/generate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, keep_alive: AI_KEEP_ALIVE, stream: false })
+      },
+      60000 // a cold load can take tens of seconds; we don't block on the result
+    );
+  } catch {
+    /* best-effort — the on-demand call will load it if this didn't land */
+  }
+}

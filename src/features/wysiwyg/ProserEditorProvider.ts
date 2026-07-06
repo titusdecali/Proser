@@ -17,16 +17,18 @@ import {
   resolveSpellModel,
   resolveLocalModel,
   proofreadFits,
-  aiStatusChips
+  aiStatusChips,
+  warmModel
 } from '../ai/engineFactory';
 import { signalAi, onAiActivity, isHeavyAiBusy } from '../ai/aiActivity';
 import { onModelState, currentModelState } from '../ai/modelState';
 import { currentModelName } from '../ai/aiModelStatus';
 import { aiSpellSuggestions } from '../spellcheck/aiSpell';
-import { AiDocSpellChecker, GrammarIssue } from '../spellcheck/aiDocSpell';
-import { harperGrammar } from '../spellcheck/harperGrammar';
+import { AiDocSpellChecker } from '../spellcheck/aiDocSpell';
+import { harperGrammar, GrammarIssue } from '../spellcheck/harperGrammar';
 import { proofreadTense, TenseFinding } from '../spellcheck/aiTense';
 import { proofreadPassive, PassiveFinding } from '../spellcheck/aiPassive';
+import { readTenseOverride, stripProserMeta } from '../../util/proserMeta';
 import { readPrompts, writePrompts, SavedPrompt } from '../ai/prompts';
 import { SpellService } from '../spellcheck/spellService';
 
@@ -117,6 +119,7 @@ interface FromWebview {
     | 'editRaw'
     | 'setFontSize'
     | 'toggleSpellcheck'
+    | 'toggleGrammar'
     | 'addToDictionary'
     | 'ignoreWord'
     | 'ignoreGrammar'
@@ -150,7 +153,7 @@ interface FromWebview {
 
 /** The toolbar "Export" menu: Standard-Manuscript-Format DOCX/PDF for the active
  *  file or the whole folder, plus a quick PDF of the current styled view (which
- *  runs in the webview via html2pdf). */
+ *  runs in the webview via html2canvas + jsPDF). */
 async function showExportMenu(panel: vscode.WebviewPanel): Promise<void> {
   type Opt = vscode.QuickPickItem & { run: () => Thenable<unknown> };
   const opts: Opt[] = [
@@ -246,7 +249,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     let statsTimer: NodeJS.Timeout | undefined;
     const postStats = () => {
       const cfg = vscode.workspace.getConfiguration(EXTENSION_ID);
-      const stats = computeProseStats(document.getText(), wordcountScanOptions());
+      const stats = computeProseStats(stripProserMeta(document.getText()), wordcountScanOptions());
       const wpm = cfg.get<number>(ConfigKeys.wordcountWordsPerMinute, 200);
       void panel.webview.postMessage({
         type: 'stats',
@@ -276,11 +279,13 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     // coined term) — suppressed from squiggles so the dictionary doesn't nag about
     // them. Guarded so a real typo can never land here (see AiDocSpellChecker).
     let lastAiCleared = new Set<string>();
-    // Grammar / word-choice errors from the AI proofread pass (different-color
+    // Grammar / word-choice errors from the Harper pass (different-color
     // underline). Same lifecycle as the AI spelling aggregate above.
     let lastGrammar: GrammarIssue[] = [];
     const postSpell = async () => {
-      const words = this.spell.enabled() ? await this.spell.misspellings(document.getText()) : [];
+      const words = this.spell.enabled()
+        ? await this.spell.misspellings(stripProserMeta(document.getText()))
+        : [];
       const merged = words
         .filter((m) => !lastAiCleared.has(m.word.toLowerCase())) // drop intentional words
         .map((m) => {
@@ -306,10 +311,11 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       void panel.webview.postMessage({
         type: 'spellResult',
         words: merged,
-        grammar:
-          this.spell.enabled() && grammarOn
-            ? lastGrammar.filter((g) => !this.spell.isGrammarIgnored(g.phrase))
-            : []
+        // Grammar is an independent toggle (its own `checks.grammar`), so it can stay
+        // on with spelling off and vice-versa.
+        grammar: grammarOn
+          ? lastGrammar.filter((g) => !this.spell.isGrammarIgnored(g.phrase))
+          : []
       });
     };
     const scheduleSpell = () => {
@@ -343,7 +349,9 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       if (!this.spell.enabled()) {
         lastAiSuggestions = new Map();
         lastAiCleared = new Set();
-        lastGrammar = [];
+        // NOTE: do NOT touch lastGrammar — grammar is Harper's (independent of the
+        // AI spell model/toggle). Clearing it here made grammar vanish when spelling
+        // was turned off, then reappear on the next Harper pass.
         return;
       }
       const helper = await getSpellEngine();
@@ -356,7 +364,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       if (!(await proofreadFits())) {
         lastAiSuggestions = new Map();
         lastAiCleared = new Set();
-        lastGrammar = [];
+        // (Harper grammar needs no AI model — leave lastGrammar alone.)
         if (!proofreadMemWarned) {
           proofreadMemWarned = true;
           void vscode.window.showWarningMessage(
@@ -377,7 +385,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       try {
         await this.aiDocSpell.update(
           docKey,
-          document.getText(),
+          stripProserMeta(document.getText()),
           helper,
           {
             findMisspellings: (t) => this.spell.misspellings(t),
@@ -412,10 +420,10 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       const grammarOn = vscode.workspace
         .getConfiguration(EXTENSION_ID)
         .get<boolean>(ConfigKeys.checksGrammar, true);
-      if (!this.spell.enabled() || !grammarOn) {
-        return; // postSpell already hides grammar in these states — skip the lint work
+      if (!grammarOn) {
+        return; // postSpell already hides grammar when off — skip the lint work
       }
-      lastGrammar = await harperGrammar(document.getText());
+      lastGrammar = await harperGrammar(stripProserMeta(document.getText()));
       void postSpell();
     };
     const scheduleHarperGrammar = () => {
@@ -449,7 +457,15 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     };
     const tenseEnabled = () =>
       vscode.workspace.getConfiguration(EXTENSION_ID).get<boolean>(ConfigKeys.checksTense, true);
+    // The top-bar Grammar toggle is the master switch for ALL writing suggestions
+    // (grammar, tense, passive, …). When off, skip the expensive AI passes entirely —
+    // the webview already hides any findings, so there's nothing to display anyway.
+    const grammarEnabled = () =>
+      vscode.workspace.getConfiguration(EXTENSION_ID).get<boolean>(ConfigKeys.checksGrammar, true);
     const runAiTense = async () => {
+      if (!grammarEnabled()) {
+        return; // suggestions off — skip the model; keep findings so they return on re-enable
+      }
       if (!tenseEnabled()) {
         lastTenseText = '';
         void panel.webview.postMessage({ type: 'tenseResult', findings: [] as TenseFinding[] });
@@ -457,9 +473,14 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       }
       const text = document.getText();
       if (text === lastTenseText) {
-        return; // unchanged since the last successful pass
+        return; // unchanged since the last successful pass (full text — so flipping
+        // the per-chapter tense override, which edits the head comment, re-triggers)
       }
-      if (text.length > AUTO_TENSE_MAX) {
+      // The per-chapter override (an invisible head comment) pins the tense; strip it
+      // (and any metadata) so the model analyzes prose only.
+      const targetTense = readTenseOverride(text);
+      const proseText = stripProserMeta(text);
+      if (proseText.length > AUTO_TENSE_MAX) {
         return; // too big for an auto pass — leave it to the sidebar's Scan
       }
       // Independent of the Spell Check AI toggle — tense has its own switch, so
@@ -479,7 +500,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       tenseCtl = new AbortController();
       signalAi(tag, true);
       try {
-        const findings = await proofreadTense(helper, text, tenseCtl.signal);
+        const findings = await proofreadTense(helper, proseText, targetTense, tenseCtl.signal);
         if (findings === null) {
           return; // unparseable/empty model output — keep prior underlines, retry next edit
         }
@@ -511,12 +532,15 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     const passiveEnabled = () =>
       vscode.workspace.getConfiguration(EXTENSION_ID).get<boolean>(ConfigKeys.checksPassiveVoice, true);
     const runAiPassive = async () => {
+      if (!grammarEnabled()) {
+        return; // suggestions off — skip the model (master Grammar toggle)
+      }
       if (!passiveEnabled()) {
         lastPassiveText = '';
         void panel.webview.postMessage({ type: 'passiveResult', findings: [] as PassiveFinding[] });
         return;
       }
-      const text = document.getText();
+      const text = stripProserMeta(document.getText());
       if (text === lastPassiveText) {
         return; // unchanged since the last successful pass
       }
@@ -565,7 +589,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       this.aiDocSpell.dispose(docKey);
       lastAiSuggestions = new Map();
       lastAiCleared = new Set();
-      lastGrammar = [];
+      // Grammar is Harper's — a dictionary/toggle change doesn't invalidate it.
       void postSpell();
       scheduleAiSpell();
     });
@@ -581,7 +605,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
         this.aiDocSpell.dispose(docKey);
         lastAiSuggestions = new Map();
         lastAiCleared = new Set();
-        lastGrammar = [];
+        // Harper grammar is model-independent — don't clear it on an AI model change.
         lastTenseText = ''; // new model → re-run the tense pass too
         lastPassiveText = ''; // …and the passive pass
         void postSpell();
@@ -596,6 +620,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       const fontSize = wsCfg.get<number>(ConfigKeys.wysiwygFontSize, 18);
       const maxWidth = wsCfg.get<string>(ConfigKeys.wysiwygMaxWidth, '80ch');
       const spellcheckEnabled = wsCfg.get<boolean>(ConfigKeys.spellcheckEnabled, true);
+      const grammarEnabled = wsCfg.get<boolean>(ConfigKeys.checksGrammar, true);
       // Sentence spacing: 'none' | '1' | '2' → expected space count for the underline.
       const spacingPref = wsCfg.get<string>(ConfigKeys.spacingAfterPeriod, '1');
       const sentenceSpacing = spacingPref === 'none' ? 0 : spacingPref === '2' ? 2 : 1;
@@ -610,6 +635,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
         fontSize,
         maxWidth,
         spellcheckEnabled,
+        grammarEnabled,
         sentenceSpacing,
         quotePunctuationStyle,
         passiveVoice,
@@ -643,9 +669,10 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
         scheduleAiSpell();
       }
     });
-    // Footer text status ("Loading Model…" / "Model Ready" / "Idle") + VRAM readout.
+    // Footer text status ("Loading Model…" / "Model Ready" / "Idle") + memory readout
+    // (Ollama's model-weight size plus the real llama-server process RAM).
     const postModelState = (s = currentModelState()) =>
-      void panel.webview.postMessage({ type: 'aiModelState', status: s.status, vramGb: s.vramGb });
+      void panel.webview.postMessage({ type: 'aiModelState', status: s.status, vramGb: s.vramGb, ramGb: s.ramGb });
     const modelStateSub = onModelState((s) => postModelState(s));
 
     const savePdf = async (base64: string, filename: string) => {
@@ -710,6 +737,10 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
           postStats();
           void postAiStatus();
           postModelState();
+          // Start loading the editor model NOW (fire-and-forget) so the first on-demand
+          // lookup — synonyms / inline spell — hits a warm model instead of a cold load
+          // that times out and silently falls back to the dictionary.
+          void warmModel();
           break;
         case 'displayed':
           // The webview has rendered the document and it's visible. NOW it's safe to
@@ -750,6 +781,13 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
             await vscode.workspace
               .getConfiguration(EXTENSION_ID)
               .update(ConfigKeys.spellcheckEnabled, msg.enabled, vscode.ConfigurationTarget.Global);
+          }
+          break;
+        case 'toggleGrammar':
+          if (typeof msg.enabled === 'boolean') {
+            await vscode.workspace
+              .getConfiguration(EXTENSION_ID)
+              .update(ConfigKeys.checksGrammar, msg.enabled, vscode.ConfigurationTarget.Global);
           }
           break;
         case 'addToDictionary':
@@ -959,9 +997,15 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
         lastPassiveText = ''; // force the next pass even if the text is unchanged
         scheduleAiPassive();
       }
-      // Toggling grammar just shows/hides the existing findings — re-post spelling.
+      // The Grammar toggle is the master suggestions switch. Toggling it shows/hides
+      // every layer immediately (the webview gates on it); also (re)run all the passes
+      // so turning it back on after edits-while-off refreshes them rather than reusing
+      // stale findings. While off, these passes early-return (no model work).
       if (e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.checksGrammar}`)) {
         void postSpell();
+        scheduleHarperGrammar();
+        scheduleAiTense();
+        scheduleAiPassive();
       }
     });
 

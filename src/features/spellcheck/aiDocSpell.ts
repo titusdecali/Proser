@@ -1,8 +1,6 @@
 import { AiClient } from '../ai/AiClient';
 import { Misspelling } from './spellService';
-import { proofreadParagraph, GrammarIssue } from './aiSpell';
-
-export { GrammarIssue };
+import { proofreadParagraph } from './aiSpell';
 
 /** What the checker needs from the dictionary: detection + word validation. */
 export interface SpellHooks {
@@ -17,15 +15,12 @@ export interface DocSpellResult {
   /** lowercased words the model judged INTENTIONAL (a sound/name/coined term),
    *  validated by the distance guard — the host suppresses their squiggles. */
   cleared: Set<string>;
-  /** Grammar / word-choice errors across the doc (different-color underline). */
-  grammar: GrammarIssue[];
 }
 
 /** Per-paragraph cached unit. */
 interface ParaResult {
   corrections: Misspelling[];
   cleared: string[];
-  grammar: GrammarIssue[];
 }
 
 const MAX_PARAGRAPHS = 600;
@@ -84,7 +79,7 @@ export class AiDocSpellChecker {
       if (cached) {
         next.set(h, cached); // unchanged → reuse, no AI call
       } else {
-        next.set(h, { corrections: [], cleared: [], grammar: [] });
+        next.set(h, { corrections: [], cleared: [] });
         if (todo.length < MAX_PARAGRAPHS) {
           todo.push({ hash: h, text: para });
         }
@@ -126,19 +121,19 @@ export class AiDocSpellChecker {
     try {
       flagged = await hooks.findMisspellings(paragraph);
     } catch {
-      return { corrections: [], cleared: [], grammar: [] };
+      return { corrections: [], cleared: [] };
     }
 
     // ONE call per paragraph: per-word typo-vs-intentional verdicts + corrections,
-    // and grammar/word-choice errors with full-paragraph context.
+    // with full-paragraph context. (Grammar is Harper's job, not the LLM's.)
     const result = await proofreadParagraph(
       engine,
       paragraph,
       flagged.map((m) => m.word),
       signal
-    ).catch(() => ({ words: [], grammar: [] }));
+    ).catch(() => ({ words: [] }));
     if (signal.aborted) {
-      return { corrections: [], cleared: [], grammar: [] };
+      return { corrections: [], cleared: [] };
     }
     const byWord = new Map(result.words.map((v) => [v.word.toLowerCase(), v]));
 
@@ -164,7 +159,7 @@ export class AiDocSpellChecker {
         corrections.push({ word: m.word, suggestions: valid });
       }
     }
-    return { corrections, cleared, grammar: result.grammar };
+    return { corrections, cleared };
   }
 }
 
@@ -181,7 +176,6 @@ function splitParagraphs(text: string): string[] {
 function aggregate(byPara: Map<string, ParaResult>): DocSpellResult {
   const suggestions = new Map<string, string[]>();
   const cleared = new Set<string>();
-  const grammar: GrammarIssue[] = [];
   for (const r of byPara.values()) {
     for (const m of r.corrections) {
       const key = m.word.toLowerCase();
@@ -196,14 +190,13 @@ function aggregate(byPara: Map<string, ParaResult>): DocSpellResult {
     for (const w of r.cleared) {
       cleared.add(w.toLowerCase());
     }
-    grammar.push(...r.grammar);
   }
   // A word that's a genuine typo somewhere wins over an "intentional" verdict
   // elsewhere — never suppress a word we also have corrections for.
   for (const key of suggestions.keys()) {
     cleared.delete(key);
   }
-  return { suggestions, cleared, grammar };
+  return { suggestions, cleared };
 }
 
 /** FNV-1a 32-bit content hash → short hex. Stable per paragraph text. */
