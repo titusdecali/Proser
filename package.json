@@ -2,7 +2,7 @@
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
   "description": "Creative writing with local AI editor",
-  "version": "1.4.39",
+  "version": "1.4.43",
   "publisher": "titusdecali",
   "license": "MIT",
   "author": {
@@ -558,6 +558,36 @@
           "scope": "machine-overridable",
           "default": "http://localhost:11434",
           "description": "Base URL of the local Ollama server."
+        },
+        "proser.ai.ollama.keepAlive": {
+          "type": "string",
+          "scope": "machine-overridable",
+          "enum": [
+            "5m",
+            "15m",
+            "30m",
+            "1h",
+            "4h",
+            "untilClose"
+          ],
+          "enumItemLabels": [
+            "5 minutes",
+            "15 minutes",
+            "30 minutes",
+            "1 hour",
+            "4 hours",
+            "Until I close the window"
+          ],
+          "enumDescriptions": [
+            "Unload the model 5 minutes after you stop typing.",
+            "Unload the model 15 minutes after you stop typing.",
+            "Unload the model 30 minutes after you stop typing.",
+            "Unload the model 1 hour after you stop typing.",
+            "Unload the model 4 hours after you stop typing.",
+            "Never unload while the window is open — only when you close it."
+          ],
+          "default": "15m",
+          "markdownDescription": "How long the **local Ollama model** stays loaded in memory after your last activity, then unloads to free RAM. **Typing keeps it loaded** (each keystroke re-arms this window), so it only elapses during genuine inactivity. The model is **always** unloaded when you close the window regardless of this setting. Only applies to the local Ollama engine. Set it from **Proser Settings → Keep Model Loaded**."
         },
         "proser.ai.ollama.brainstormContextTokens": {
           "type": "number",

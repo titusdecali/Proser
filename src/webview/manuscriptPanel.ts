@@ -276,6 +276,14 @@ const QUOTE_STYLES: Array<[string, string]> = [
   ['outside', 'Outside (British)'],
   ['off', 'Off']
 ];
+const KEEP_ALIVE_TYPES: Array<[string, string]> = [
+  ['5m', '5 minutes'],
+  ['15m', '15 minutes'],
+  ['30m', '30 minutes'],
+  ['1h', '1 hour'],
+  ['4h', '4 hours'],
+  ['untilClose', 'Until I close the window']
+];
 
 function fillSelect(sel: HTMLSelectElement | null, items: Array<[string, string]>, selected: string): void {
   if (!sel) {
@@ -320,6 +328,7 @@ function onSettingsOptions(d: {
   spellType: string;
   spacing: string;
   quoteStyle?: string;
+  keepAlive?: string;
   passiveVoice: boolean;
   tenseCheck: boolean;
   grammarCheck: boolean;
@@ -329,6 +338,7 @@ function onSettingsOptions(d: {
   fillSelect($('spellType') as HTMLSelectElement | null, SPELL_TYPES, d.spellType);
   fillSelect($('spacingType') as HTMLSelectElement | null, SPACING_TYPES, d.spacing || '1');
   fillSelect($('quoteStyle') as HTMLSelectElement | null, QUOTE_STYLES, d.quoteStyle || 'inside');
+  fillSelect($('keepAlive') as HTMLSelectElement | null, KEEP_ALIVE_TYPES, d.keepAlive || '15m');
   const grammar = $('grammarCheck') as HTMLInputElement | null;
   if (grammar) {
     grammar.checked = d.grammarCheck !== false;
@@ -355,6 +365,9 @@ $('spacingType')?.addEventListener('change', (e) =>
 );
 $('quoteStyle')?.addEventListener('change', (e) =>
   vscode.postMessage({ type: 'setQuoteStyle', value: (e.target as HTMLSelectElement).value })
+);
+$('keepAlive')?.addEventListener('change', (e) =>
+  vscode.postMessage({ type: 'setKeepAlive', value: (e.target as HTMLSelectElement).value })
 );
 $('passiveCheck')?.addEventListener('change', (e) =>
   vscode.postMessage({ type: 'setPassiveCheck', enabled: (e.target as HTMLInputElement).checked })

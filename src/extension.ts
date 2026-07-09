@@ -9,6 +9,8 @@ import { registerQualityLint } from './features/qualityLint/qualityLinter';
 import { registerOutline } from './features/outline/documentSymbols';
 import { registerWritingModes } from './features/focusMode/focusMode';
 import { registerAI } from './features/ai/registerAI';
+import { unloadEditorModelOnShutdown } from './features/ai/engineFactory';
+import { registerKeepModelWarm } from './features/ai/keepWarm';
 import { startModelStatePolling } from './features/ai/modelState';
 import { registerBrainstorm } from './features/ai/brainstormPanel';
 import { registerStoryMemory } from './features/storyMemory/register';
@@ -32,6 +34,7 @@ export function activate(context: vscode.ExtensionContext): void {
   registerOutline(context); // M5
   registerWritingModes(context); // M5 (focus + typewriter)
   registerAI(context); // M6
+  registerKeepModelWarm(context); // hold the local model resident while you type (keep_alive)
   startModelStatePolling(context); // footer: live "Loading/Ready" + VRAM for the one model
   registerStoryMemory(context); // M12 (Story Memory engine — must precede Brainstorm so it can pull canon)
   registerBrainstorm(context); // M11 (AI brainstorming chat panel)
@@ -41,6 +44,10 @@ export function activate(context: vscode.ExtensionContext): void {
   registerSpellingView(context, spell); // M10 (dedicated Spelling sidebar)
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   // Disposables registered via context.subscriptions are cleaned up by VS Code.
+  // Additionally free the local editor model so Ollama doesn't keep it (and its RAM)
+  // resident for the rest of its 8h keep-alive after the window closes. Best-effort:
+  // VS Code only briefly awaits deactivate, and a local unload POST is quick.
+  await unloadEditorModelOnShutdown();
 }

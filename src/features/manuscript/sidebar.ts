@@ -136,6 +136,7 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
           e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.spellcheckLanguage}`) ||
           e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.spacingAfterPeriod}`) ||
           e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.quotesPunctuationStyle}`) ||
+          e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.aiKeepAlive}`) ||
           e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.checksPassiveVoice}`) ||
           e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.checksTense}`) ||
           e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.checksGrammar}`)
@@ -273,6 +274,14 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
           void vscode.workspace
             .getConfiguration(EXTENSION_ID)
             .update(ConfigKeys.quotesPunctuationStyle, msg.value, vscode.ConfigurationTarget.Global);
+        }
+        break;
+      // Settings → Keep Model Loaded dropdown ('5m'|'15m'|'30m'|'1h'|'4h'|'untilClose').
+      case 'setKeepAlive':
+        if (msg.value) {
+          void vscode.workspace
+            .getConfiguration(EXTENSION_ID)
+            .update(ConfigKeys.aiKeepAlive, msg.value, vscode.ConfigurationTarget.Global);
         }
         break;
       // Settings → Live Style Checks (passive voice / tense) checkboxes.
@@ -441,6 +450,9 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
     // Quotation punctuation placement ('inside' | 'outside' | 'off').
     const quoteStyle = cfg.get<string>(ConfigKeys.quotesPunctuationStyle, 'inside');
 
+    // Idle window before the local model unloads ('5m'|'15m'|'30m'|'1h'|'4h'|'untilClose').
+    const keepAlive = cfg.get<string>(ConfigKeys.aiKeepAlive, '15m');
+
     // Live style checks: grammar (AI) + passive voice (logic) + tense (AI) underlines.
     const passiveVoice = cfg.get<boolean>(ConfigKeys.checksPassiveVoice, true);
     const tenseCheck = cfg.get<boolean>(ConfigKeys.checksTense, true);
@@ -454,6 +466,7 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
       spellType,
       spacing,
       quoteStyle,
+      keepAlive,
       passiveVoice,
       tenseCheck,
       grammarCheck
@@ -886,19 +899,19 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
   </div>
 
   <div class="panel" data-tab="editor">
-    <div class="sec">Checks</div>
+    <div class="sec">Batch Checks</div>
     <div class="ctlgrid">
       <label for="scope">Scope</label>
       <span class="select-wrap">
-        <select id="scope">
+        <select id="scope" title="Which files the batch checks and continuous scan run over.">
           <option value="active">This file</option>
           <option value="folder">Whole folder</option>
         </select>
       </span>
-      <label for="tense">Tense</label>
+      <label for="tense">Scan as</label>
       <span class="select-wrap">
-        <select id="tense">
-          <option value="auto">Auto</option>
+        <select id="tense" title="Which tense the batch checks and continuous scan assume. This is NOT a chapter's own narrative tense — that's set per-chapter on the editor toolbar's clock button.">
+          <option value="auto">Auto (detect)</option>
           <option value="past">Past</option>
           <option value="present">Present</option>
         </select>
@@ -910,7 +923,7 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
       <button class="check check-passive" data-check="passive"><span class="dot"></span><span class="lbl">Check passive voice</span></button>
       <button class="check check-continuity" data-check="continuity"><span class="dot"></span><span class="lbl">Check continuity</span></button>
     </div>
-    <div class="pm-note">Scope &amp; Tense apply to these checks and the continuous scan. The live underlines as you type always check the file you're editing.</div>
+    <div class="pm-note"><b>Scope</b> and <b>Scan as</b> control only the batch checks and continuous scan above. A chapter's own narrative tense — what the live underlines check against as you type — is set separately, per chapter, on the <b>editor toolbar's clock button</b> (Auto / Past / Present / Future).</div>
     <div class="sec">Insert</div>
     <div class="inserts">
       ${cmdBtn(Commands.manuscriptNewChapter, 'New Chapter', ICONS.chapter, 'pm-chip')}
@@ -940,6 +953,14 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
         <button class="gear-btn" id="editorManage" title="Add / Remove Models">${ICONS.gear}</button>
       </span>
     </div>
+    <div class="sec">Keep Model Loaded</div>
+    <div class="ctlgrid">
+      <label for="keepAlive">While idle</label>
+      <span class="model-ctl">
+        <span class="select-wrap"><select id="keepAlive"></select></span>
+      </span>
+    </div>
+    <div class="pm-note">How long the local AI model stays in memory after you stop typing, then unloads to free RAM. Typing keeps it loaded; it always unloads when you close the window. Local Ollama only.</div>
     <div class="sec">Synonyms &amp; Antonyms</div>
     <div class="ctlgrid">
       <label for="synType">Type</label>

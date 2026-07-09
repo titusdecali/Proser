@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import { ConfigKeys, EXTENSION_ID } from '../../constants';
+import { ConfigKeys, EXTENSION_ID, AI_KEEP_ALIVE } from '../../constants';
 import { AiClient } from './AiClient';
 import { OpenRouterClient } from './openRouterClient';
-import { OllamaClient, unloadOtherModels, preloadModel } from './ollamaClient';
+import { OllamaClient, unloadOtherModels, preloadModel, unloadModel } from './ollamaClient';
 import { SecretStore } from './secretStore';
 import { pickLocalModel } from './localModelPicker';
 import { LOCAL_MODELS, detectMemoryProfile, editorFitsWithHelper, localModelInfo } from './ramAdvisor';
@@ -12,6 +12,15 @@ export type EngineKind = 'off' | 'openrouter' | 'ollama';
 
 function config() {
   return vscode.workspace.getConfiguration(EXTENSION_ID);
+}
+
+/** Resolves the `ai.ollama.keepAlive` setting to an Ollama keep_alive value: a
+ *  duration string ('15m', '1h', …) passed through as-is, or -1 for the `untilClose`
+ *  choice (never idle-unload; deactivate() evicts it on window close). Central so
+ *  every client/warm call uses the same user-chosen window. */
+export function resolvedKeepAlive(): string | number {
+  const v = config().get<string>(ConfigKeys.aiKeepAlive, AI_KEEP_ALIVE) || AI_KEEP_ALIVE;
+  return v === 'untilClose' ? -1 : v;
 }
 
 /**
@@ -26,7 +35,7 @@ async function getFeatureEngine(model: string): Promise<OllamaClient | undefined
     return undefined;
   }
   const shared = config().get<string>(ConfigKeys.aiOllamaEndpoint, 'http://localhost:11434');
-  return new OllamaClient(shared, model);
+  return new OllamaClient(shared, model, resolvedKeepAlive());
 }
 
 /** The editor models that run stably on this machine, plus the currently-selected
@@ -196,7 +205,7 @@ export async function warmModel(): Promise<void> {
   }
   const endpoint = cfg.get<string>(ConfigKeys.aiOllamaEndpoint, 'http://localhost:11434');
   const model = cfg.get<string>(ConfigKeys.aiOllamaModel, 'gemma4:e4b').trim();
-  await preloadModel(endpoint, model);
+  await preloadModel(endpoint, model, resolvedKeepAlive());
 }
 
 export async function enforceSingleLoadedModel(): Promise<void> {
@@ -212,6 +221,29 @@ export async function enforceSingleLoadedModel(): Promise<void> {
   if (isLocalOllama(endpoint)) {
     await unloadOtherModels(LEGACY_HELPER_ENDPOINT, '');
   }
+}
+
+/**
+ * Frees the editor model when the window closes so Ollama doesn't hold it resident
+ * (and its RAM) for the rest of the 8h keep-alive after Proser is gone — the reason
+ * "Llama" appeared to keep running in the background. Best-effort and only for a
+ * LOCAL Ollama we manage: a remote/shared server is left alone (unloading it would
+ * evict a model other clients may be using). No-op for cloud/off engines. Called
+ * from the extension's deactivate(); VS Code only briefly awaits shutdown, so the
+ * unload uses a short timeout and never blocks. Note: closing one window unloads the
+ * model even if another Proser window is open — that window cold-reloads on next use.
+ */
+export async function unloadEditorModelOnShutdown(): Promise<void> {
+  const cfg = config();
+  if (cfg.get<EngineKind>(ConfigKeys.aiEngine, 'off') !== 'ollama') {
+    return; // cloud/off — no resident local model to free
+  }
+  const endpoint = cfg.get<string>(ConfigKeys.aiOllamaEndpoint, 'http://localhost:11434');
+  if (!isLocalOllama(endpoint)) {
+    return; // remote/shared Ollama — not ours to unload
+  }
+  const model = cfg.get<string>(ConfigKeys.aiOllamaModel, 'gemma4:e4b').trim();
+  await unloadModel(endpoint, model);
 }
 
 /** True for the standard local Ollama endpoint (so we don't poke a remote server's
@@ -239,7 +271,8 @@ export async function createEngine(secrets: SecretStore): Promise<AiClient | und
   if (kind === 'ollama') {
     return new OllamaClient(
       cfg.get<string>(ConfigKeys.aiOllamaEndpoint, 'http://localhost:11434'),
-      cfg.get<string>(ConfigKeys.aiOllamaModel, 'gemma4:e4b')
+      cfg.get<string>(ConfigKeys.aiOllamaModel, 'gemma4:e4b'),
+      resolvedKeepAlive()
     );
   }
   return undefined;

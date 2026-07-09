@@ -2863,10 +2863,10 @@ function showTenseMenu(): void {
   const card = el('div');
   card.id = 'proser-suggest'; // reuse the popup card styling
   card.addEventListener('mousedown', (e) => e.preventDefault());
-  card.appendChild(el('div', 'psg-title', 'Narrative tense'));
+  card.appendChild(el('div', 'psg-title', 'Narrative tense · this chapter'));
   const opts = el('div', 'psg-options');
   const choices: Array<{ label: string; value: TenseOverride | null }> = [
-    { label: 'Auto (global default)', value: null },
+    { label: 'Auto (detect)', value: null },
     { label: 'Past', value: 'past' },
     { label: 'Present', value: 'present' },
     { label: 'Future', value: 'future' }

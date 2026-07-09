@@ -96,7 +96,12 @@ interface OllamaChatFrame {
 export class OllamaClient implements AiClient {
   constructor(
     private readonly endpoint: string,
-    private readonly model: string
+    private readonly model: string,
+    /** Idle window Ollama holds the model after each request. A duration string
+     *  ('15m', '1h', …) or -1 to never idle-unload. Defaults to AI_KEEP_ALIVE; the
+     *  live value comes from the `ai.ollama.keepAlive` setting, resolved by the caller
+     *  (engineFactory) so this client stays free of a vscode/config dependency. */
+    private readonly keepAlive: string | number = AI_KEEP_ALIVE
   ) {}
 
   get label(): string {
@@ -133,8 +138,9 @@ export class OllamaClient implements AiClient {
     opts?: ChatOpts
   ): Promise<string> {
     // keep_alive keeps the model resident between requests (Ollama's default is only
-    // 5 min, so it idle-unloads mid-writing). Each request refreshes the window.
-    const body: Record<string, unknown> = { model: this.model, messages, stream: true, keep_alive: AI_KEEP_ALIVE };
+    // 5 min, so it idle-unloads mid-writing). Each request refreshes the window. The
+    // duration comes from the user's `ai.ollama.keepAlive` setting (see constructor).
+    const body: Record<string, unknown> = { model: this.model, messages, stream: true, keep_alive: this.keepAlive };
     if (opts?.format) {
       // Ollama accepts both 'json' and a full JSON Schema object as `format`.
       body.format = opts.format;
@@ -331,13 +337,14 @@ export async function unloadOtherModels(endpoint: string, keepTag: string): Prom
 }
 
 /**
- * Warms a model: asks Ollama to LOAD it into memory (no prompt → no generation) and
- * sets the keep-alive window, so the next real request (synonyms, inline spell, …)
- * hits a resident model instead of paying a 15–40s cold load that times out and falls
- * back to the dictionary. Best-effort and fire-and-forget; the long timeout covers a
- * genuine cold load. No-op if Ollama is unreachable.
+ * Unloads ONE model from Ollama immediately (`keep_alive: 0`, Ollama's documented
+ * eviction), freeing the RAM its runner holds. Best-effort and silent — used on
+ * window close so the editor model doesn't stay resident for the rest of its 8h
+ * keep-alive after Proser is gone. The short timeout keeps it inside VS Code's
+ * deactivate budget; if Ollama isn't running the connection fails fast and there's
+ * nothing to free.
  */
-export async function preloadModel(endpoint: string, model: string): Promise<void> {
+export async function unloadModel(endpoint: string, model: string): Promise<void> {
   if (!model) {
     return;
   }
@@ -348,7 +355,38 @@ export async function preloadModel(endpoint: string, model: string): Promise<voi
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, keep_alive: AI_KEEP_ALIVE, stream: false })
+        body: JSON.stringify({ model, keep_alive: 0 })
+      },
+      2500
+    );
+  } catch {
+    /* best-effort — Ollama not running or the model was already unloaded */
+  }
+}
+
+/**
+ * Warms a model: asks Ollama to LOAD it into memory (no prompt → no generation) and
+ * sets the keep-alive window, so the next real request (synonyms, inline spell, …)
+ * hits a resident model instead of paying a 15–40s cold load that times out and falls
+ * back to the dictionary. Best-effort and fire-and-forget; the long timeout covers a
+ * genuine cold load. No-op if Ollama is unreachable.
+ */
+export async function preloadModel(
+  endpoint: string,
+  model: string,
+  keepAlive: string | number = AI_KEEP_ALIVE
+): Promise<void> {
+  if (!model) {
+    return;
+  }
+  const base = endpoint.replace(/\/$/, '');
+  try {
+    await fetchWithTimeout(
+      `${base}/api/generate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, keep_alive: keepAlive, stream: false })
       },
       60000 // a cold load can take tens of seconds; we don't block on the result
     );

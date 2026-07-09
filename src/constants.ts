@@ -102,6 +102,10 @@ export const ConfigKeys = {
   aiOpenRouterPreferGroq: 'ai.openrouter.preferGroq',
   aiOllamaModel: 'ai.ollama.model',
   aiOllamaEndpoint: 'ai.ollama.endpoint',
+  /** How long the local model stays resident after your last activity before Ollama
+   *  unloads it (frees its RAM). Typing re-arms this window; `untilClose` never
+   *  idle-unloads and relies on the window-close handler. See {@link AI_KEEP_ALIVE}. */
+  aiKeepAlive: 'ai.ollama.keepAlive',
   /** Max context window (tokens) for Brainstorm + Story-Memory injection — the
    *  budget the folded canon is sized to. Bigger fits more of your story memory but
    *  uses more VRAM (the KV cache scales with it). Capped by the model's own window. */
@@ -120,9 +124,13 @@ export const ConfigKeys = {
  *  chapters for Story-Memory extraction, while keeping the KV cache small. */
 export const AI_CONTEXT_TOKENS = 8192;
 
-/** How long Ollama keeps the model loaded after a request (session-length; each
- *  request refreshes it) so it doesn't idle-unload mid-writing. */
-export const AI_KEEP_ALIVE = '8h';
+/** Default idle window before Ollama unloads the model, and the fallback when the
+ *  `ai.ollama.keepAlive` setting is unset. Each request (and every typing burst, via
+ *  registerKeepModelWarm) refreshes it, so it only elapses during genuine inactivity;
+ *  deactivate() also evicts the model outright when the window closes. The setting's
+ *  `untilClose` choice resolves to -1 (never idle-unload). Keep this in sync with the
+ *  `proser.ai.ollama.keepAlive` default in package.json. */
+export const AI_KEEP_ALIVE = '15m';
 
 /** SecretStorage key for the OpenRouter API key. Never stored in settings. */
 export const SECRET_OPENROUTER_API_KEY = 'proser.openrouter.apiKey';

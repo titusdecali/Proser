@@ -32,6 +32,11 @@ function buildUser(body: string, targetTense?: TenseOverride): string {
     '  "She thumbed her ring and the bike waited." → fine (past).\n' +
     '  "She likes to go there often." → SLIP (present "likes" in past narration) → ' +
     'suggestion "She liked to go there often."\n' +
+    'Flag ONLY the FINITE main verb — the one that carries the sentence\'s tense. NEVER flag an ' +
+    '-ing form (present participle or gerund) or a "to"-infinitive: these are non-finite and are ' +
+    'correct in BOTH past and present narration. In PAST narration "Aeons chiseled away, paving a road" ' +
+    'is CORRECT — do NOT change "paving" to "paved"; "She turned, smiling" is CORRECT — do NOT change ' +
+    '"smiling" to "smiled". Only a finite verb in the wrong tense (likes→liked, is→was) is a slip.\n' +
     'Do NOT flag: dialogue inside quotation marks, or a passage clearly set in another time on purpose. ' +
     'When unsure, leave it out.\n' +
     'Include a sentence ONLY if your "suggestion" is genuinely DIFFERENT from the original — NEVER include ' +
@@ -75,9 +80,32 @@ function tenseSig(s: string): string {
  *  "reinforces", "more vivid", …) rather than an actual tense slip. A real tense fix
  *  only swaps verb forms; anything the model justifies on style is not ours to flag. */
 function nonTenseReason(reason: string): boolean {
-  return /contraction|formal|word.?choice|rephras|reword|punctuat|capitaliz|weak|stronger|strengthen|reinforc|emphasi|vivid|flow|smooth|concise|awkward|improv|better|enhanc|stylist|tighten|punch|clarit|clearer|elegan|rhythm/i.test(
+  return /participl|gerund|infinitiv|non.?finite|contraction|formal|word.?choice|rephras|reword|punctuat|capitaliz|weak|stronger|strengthen|reinforc|emphasi|vivid|flow|smooth|concise|awkward|improv|better|enhanc|stylist|tighten|punch|clarit|clearer|elegan|rhythm/i.test(
     reason
   );
+}
+
+/** True when the suggestion's only change turns an -ing form into something else —
+ *  i.e. the model "corrected" a PRESENT PARTICIPLE, gerund, or the verb of a
+ *  participial phrase ("chiseled away, paving a road" → "…paved a road"; "she turned,
+ *  smiling" → "…smiled"). An -ing verb is NON-FINITE: it carries no narrative tense and
+ *  is perfectly grammatical inside past- OR present-tense prose, so changing it is a
+ *  false positive, not a tense slip. Word counts already match at the call site, so we
+ *  align the two token lists 1:1; if any word the model REPLACED ends in -ing, it was
+ *  de-participling. A genuine progressive-tense slip changes the AUXILIARY ("is walking"
+ *  → "was walking"), leaving the -ing word untouched, so this never rejects a real fix. */
+function convertsParticiple(phrase: string, fix: string): boolean {
+  const pw = tenseSig(phrase).split(' ');
+  const fw = tenseSig(fix).split(' ');
+  if (pw.length !== fw.length) {
+    return false; // only meaningful for aligned 1:1 verb swaps
+  }
+  for (let i = 0; i < pw.length; i++) {
+    if (pw[i] !== fw[i] && /ing$/.test(pw[i])) {
+      return true; // a replaced word was an -ing form → participle/gerund, not a tense slip
+    }
+  }
+  return false;
 }
 
 /** Removes DOUBLE-quoted spans (dialogue) so a sentence can be judged on its NARRATION
@@ -123,7 +151,10 @@ const tenseAccept: ProofreadPass['accept'] = ({ phrase, fix, reason }) => {
     // A genuine tense slip is a 1:1 verb-form swap (likes→liked, is→was), so the
     // normalized word counts must match. This rejects the model's stylistic rewrites
     // that ADD or DROP words — e.g. "…at Blueprint." → "…at Blueprint did he think."
-    sp.split(' ').length === sf.split(' ').length
+    sp.split(' ').length === sf.split(' ').length &&
+    // Reject "corrections" of -ing participles/gerunds (paving→paved) — they're
+    // non-finite and correct in past-tense narration, the #1 tense false positive.
+    !convertsParticiple(phrase, fix)
   );
 };
 
