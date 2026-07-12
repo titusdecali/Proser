@@ -28,7 +28,7 @@ interface HarperSpan {
   end: number;
 }
 interface HarperSuggestion {
-  kind(): number; // 1 = remove, otherwise replace
+  kind(): number; // Harper SuggestionKind: 0 = replace, 1 = remove, 2 = insert after the span
   get_replacement_text(): string;
 }
 interface HarperLint {
@@ -50,15 +50,18 @@ interface HarperLinter {
  *  and more precise than post-filtering by message). Verified against real chapters: these
  *  are the clear false-positive generators in creative writing. High-precision grammar
  *  (subject/verb agreement, homophones like to/too, repetition) stays ON. Stylistic rules
- *  the author chose to keep (SentenceCapitalization, CompoundNouns, MassNouns, NumericRange-
- *  EnDash) are deliberately NOT here. Rule keys come from Harper's getLintDescriptions. */
+ *  the author chose to keep (SentenceCapitalization, CompoundNouns, NumericRangeEnDash)
+ *  are deliberately NOT here. Rule keys come from Harper's getLintDescriptions. */
 const FICTION_RULE_CONFIG: Record<string, boolean> = {
   UnclosedQuotes: false, // fires on multi-paragraph / interrupted dialogue — the #1 noise source
   AnA: false, // "a"/"an" misfires on coined & proper nouns ("a Eelan" → "an Eelan")
   LetsConfusion: false, // "lets" (a normal verb) wrongly pushed to "let's"
   EllipsisLength: false, // the manuscript intentionally uses "..."
   UseEllipsisCharacter: false, // …and doesn't want it auto-converted to "…"
-  AvoidCurses: false // profanity is in scope for fiction; not the editor's business
+  AvoidCurses: false, // profanity is in scope for fiction; not the editor's business
+  PronounContraction: false, // pushes ordinary past-tense "were" to "we're" ("they were reading" → "they we're")
+  MassNouns: false, // fiction nominalizes freely — "a burning on her back", "a knowing" are intentional
+  MissingTo: false // mis-parses participial adjectives as verbs ("their intended use" → wants "intended to")
 };
 
 /** Lint kinds we do NOT surface as grammar underlines. Spelling is owned by the
@@ -176,6 +179,12 @@ export async function harperGrammar(text: string): Promise<GrammarIssue[]> {
   } catch {
     return [];
   }
+  return mapHarperLints(text, lints);
+}
+
+/** The lint→issue mapping, separated from the linter lifecycle so the suggestion-kind
+ *  handling (replace / remove / insert-after) is unit-testable with stub lints. */
+export function mapHarperLints(text: string, lints: HarperLint[]): GrammarIssue[] {
   const out: GrammarIssue[] = [];
   const seen = new Set<string>();
   for (const lint of lints) {
@@ -204,7 +213,12 @@ export async function harperGrammar(text: string): Promise<GrammarIssue[]> {
       phrase = raw.trim();
       fix = '';
     } else {
-      const replacement = sug.get_replacement_text();
+      // Insert-after (kind 2) keeps the span and appends the suggestion text after it,
+      // exactly as Harper applies it. Treating it as a replacement — the old behavior —
+      // DELETED the flagged word ("their intended" → "their to"). Kind 0 is a plain
+      // replacement of the span.
+      const sugText = sug.get_replacement_text();
+      const replacement = sug.kind() === 2 ? raw + sugText : sugText;
       if (/^\S+$/.test(raw.trim())) {
         // Single token — expand with the preceding word for a unique anchor.
         const ctxStart = precedingWordStart(text, span.start);

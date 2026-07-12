@@ -2673,7 +2673,15 @@ function showGrammarCard(finding: GrammarFinding): void {
   const opts = el('div', 'psg-options');
   const fix = el('button', 'psg-opt c1', finding.fix) as HTMLButtonElement;
   fix.title = `Replace “${finding.phrase}” with “${finding.fix}”`;
-  fix.addEventListener('click', () => applyReplacement(finding.fix));
+  fix.addEventListener('click', () => {
+    applyReplacement(finding.fix);
+    // Drop the finding locally (as Ignore does) so the underline clears now. Without
+    // this, a fix whose text CONTAINS the phrase — every insert-after fix, e.g.
+    // "their intended" → "their intended to" — re-anchors on the corrected text until
+    // Harper re-lints, and a second click would apply the insertion twice.
+    grammarFindings = grammarFindings.filter((g) => g.phrase !== finding.phrase);
+    paintGrammar();
+  });
   opts.appendChild(fix);
   card.appendChild(opts);
   const actions = el('div', 'psg-actions');

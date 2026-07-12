@@ -25,7 +25,14 @@ const SUPPRESSED = [
   "Things are lookin' up now.", // dropped-g, straight apostrophe (Typo)
   'Things are lookin’ up now.', // dropped-g, curly apostrophe (Typo)
   'I’m just goin’ home, nothin’ doin’.', // multiple dropped-g (Typo)
-  'His own ass nearly fell off.' // offensive language (WordChoice)
+  'His own ass nearly fell off.', // offensive language (WordChoice)
+  // PronounContraction: pushed ordinary past-tense "were" to "we're"
+  'Sixty, seventy people stood on the floor in their exotic fabrics, perfectly still, heads tilted ' +
+    'at the same slight angle people used when they were reading their lens instead of the room.',
+  // MassNouns: fiction nominalizes freely — "a burning" is intentional
+  'Alix felt a burning on her back as she walked to the shed.',
+  // MissingTo: mis-parsed the participial adjective "intended" as a verb needing "to"
+  'Whatever their intended use, they floated Gary over the pit.'
 ];
 
 // Must STILL be caught after the opt-outs (guards against over-suppression).

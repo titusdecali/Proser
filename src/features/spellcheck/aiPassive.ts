@@ -74,7 +74,7 @@ function buildUser(body: string): string {
  *  tokens like "keep"/"state"/"formal") so it never swallows a legitimate FLAG reason
  *  like "active keeps it tighter" or "the doer's state is vivid". */
 function keepReason(reason: string): boolean {
-  return /passive is (?:fine|correct|appropriate|better|preferred|intentional)|keep(?:s|ing)? (?:the |it )?passive|(?:intentional|deliberate)(?:ly)? passive|leave (?:it|as|in) passive|emphasi[sz]e[sd]? the recipient|doer is (?:unknown|unimportant)/i.test(
+  return /passive is (?:fine|correct|appropriate|better|preferred|intentional)|keep(?:s|ing)? (?:the |it )?passive|(?:intentional|deliberate)(?:ly)? passive|leave (?:it|as|in) passive|emphasi[sz]e[sd]? the recipient|doer is (?:unknown|unimportant)|(?:fine|correct) as[- ](?:is|written)|no change (?:is )?(?:needed|necessary)/i.test(
     reason
   );
 }

@@ -37,6 +37,10 @@ function buildUser(body: string, targetTense?: TenseOverride): string {
     'correct in BOTH past and present narration. In PAST narration "Aeons chiseled away, paving a road" ' +
     'is CORRECT — do NOT change "paving" to "paved"; "She turned, smiling" is CORRECT — do NOT change ' +
     '"smiling" to "smiled". Only a finite verb in the wrong tense (likes→liked, is→was) is a slip.\n' +
+    'A BARE infinitive after a perception or causative verb (felt/saw/heard/watched/let/made/helped + ' +
+    'object + verb) is also non-finite and CORRECT in past narration: "He felt the pressure build ' +
+    'against his ears", "she watched the sun set", "they heard the door close" are all correct — the ' +
+    'finite verb (felt/watched/heard) already carries the tense; do NOT change "build" to "built".\n' +
     'Do NOT flag: dialogue inside quotation marks, or a passage clearly set in another time on purpose. ' +
     'When unsure, leave it out.\n' +
     'Include a sentence ONLY if your "suggestion" is genuinely DIFFERENT from the original — NEVER include ' +
@@ -67,7 +71,8 @@ function tenseSig(s: string): string {
     .replace(/\b(\w+)'ve\b/g, '$1 have')
     .replace(/\b(\w+)'ll\b/g, '$1 will')
     .replace(/\b(\w+)'m\b/g, '$1 am')
-    .replace(/\b(\w+)'s\b/g, '$1 is')
+    .replace(/\b(\w+)'s\b/g, '$1 _s_')
+    .replace(/\b(?:is|has)\b/g, '_s_')
     .replace(/\b(\w+)'d\b/g, '$1 _md_')
     .replace(/\b(?:would|had)\b/g, '_md_')
     .replace(/[^a-z0-9_]+/g, ' ')
@@ -108,6 +113,91 @@ function convertsParticiple(phrase: string, fix: string): boolean {
   return false;
 }
 
+/** Perception / causative verbs that govern a BARE-infinitive complement ("felt the
+ *  pressure build", "watched the sun set", "made him stop"). The bare verb after them is
+ *  NON-FINITE — correct in past or present narration — so a "fix" that inflects it
+ *  ("build" → "built") is a false positive, not a tense slip. (No "had": tenseSig
+ *  rewrites it, so causative-have can't be matched here anyway.) */
+const PERCEPTION_VERB_RE =
+  /^(?:feel|feels|felt|see|sees|saw|seen|watch|watches|watched|hear|hears|heard|notice|notices|noticed|observe|observes|observed|sense|senses|sensed|let|lets|make|makes|made|help|helps|helped)$/;
+
+/** Words that start a NEW clause between a perception verb and a later verb — past one
+ *  of these, that later verb is finite again ("felt cold and walks away" IS a real slip;
+ *  "watched as the crowd surge forward" is too). tenseSig strips punctuation, so these
+ *  conjunctions/subordinators are the only clause boundaries still visible. */
+const CLAUSE_BREAK_RE =
+  /^(?:and|but|or|nor|so|yet|then|when|while|as|after|before|because|since|until|till|once|where|that|who|whom|whose|which|if|though|although|unless|whenever)$/;
+
+/** Finite-LOOKING verb forms: 3rd-person -s ("grows" — but not base forms in -ss/-us
+ *  like "press"/"focus") or a regular past in -ed (but not base forms in -eed like
+ *  "bleed"/"proceed"). A bare infinitive is a BASE form, so a changed word that already
+ *  looks finite is never given the perception-verb exemption. */
+const FINITE_FORM_RE = /(?:[^su]s|[^e]ed)$/;
+
+/** Base verbs that themselves END in -ed (the one shape the suffix test misreads as a
+ *  past form): "watched the blade embed itself", "watched them wed". */
+const BASE_ED_VERB_RE = /^(?:embed|imbed|wed|shed|sled|tread)$/;
+
+/** Finite forms the suffix test can't see. A change to one of these is a finite-verb
+ *  edit — a real candidate slip — so it must never get the bare-infinitive exemption:
+ *  irregular copula/auxiliaries ("He noticed the streets are empty." → "were"), modals
+ *  ("She felt she can trust him." → "could" — a bare infinitive is never a modal), and
+ *  common irregular PASTS, which are how present-tense narration slips read ("She
+ *  watches the sun rose…" → "rise"). ("be" is deliberately absent: as a changed word it
+ *  is almost always a true bare infinitive, e.g. "let it be". "had"/"would" never appear
+ *  — tenseSig rewrites them. Pasts identical to their base form — set, put, let, cut —
+ *  are undecidable and stay exempt.) */
+const IRREGULAR_FINITE_RE =
+  /^(?:are|were|am|have|do|did|can|could|may|might|shall|should|will|must|came|went|ran|fell|rose|stood|sat|took|got|gave|found|knew|grew|drew|threw|flew|spoke|broke|drove|rode|wrote|ate|drank|sang|rang|sank|swam|began|became|held|left|met|said|told|kept|slept|brought|bought|thought|taught|caught|fought|sought|stole|chose|froze|wore|tore|swore|hung|swung|struck|stuck)$/;
+
+/** True when the changed word already looks like a FINITE verb form — i.e. a genuine
+ *  candidate slip that must never receive the bare-infinitive exemption. */
+function looksFinite(word: string): boolean {
+  return (FINITE_FORM_RE.test(word) && !BASE_ED_VERB_RE.test(word)) || IRREGULAR_FINITE_RE.test(word);
+}
+
+/** Determiners: when one sits directly BEFORE a perception-verb lookalike, that word is
+ *  a NOUN, not a verb ("a sense of dread", "the watch", "his make of engine") and must
+ *  not grant the exemption — the walk-back continues past it instead. Only words that
+ *  can NEVER float before a real verb belong here: "one"/"each"/"all" are excluded
+ *  because they precede true perception verbs constantly ("No one saw the lights
+ *  flicker", "they each watched the flames rise"). Known limitation: an adjective
+ *  between determiner and noun ("the old watches tick") defeats this one-token check —
+ *  a wider window would misread "the man felt…" and break the primary exemption. */
+const DETERMINER_RE = /^(?:a|an|the|this|these|those|his|her|their|its|my|your|our|some|any|no|every)$/;
+
+/** True when the suggestion's change inflects a BARE INFINITIVE that a perception/
+ *  causative verb governs ("He felt the pressure build…" → "…built…"). The finite
+ *  perception verb already carries the sentence's tense; its bare-verb complement is
+ *  non-finite and correct in both tenses, so "fixing" it is a false positive. We walk
+ *  back from the changed base-form word looking for an UNCHANGED perception verb in the
+ *  same clause; a clause boundary ends the search so a genuine slip in a following
+ *  clause ("They felt tired and walk away.") is still flagged. */
+function bareInfinitiveComplement(phrase: string, fix: string): boolean {
+  const pw = tenseSig(phrase).split(' ');
+  const fw = tenseSig(fix).split(' ');
+  if (pw.length !== fw.length) {
+    return false; // only meaningful for aligned 1:1 verb swaps
+  }
+  for (let i = 0; i < pw.length; i++) {
+    if (pw[i] === fw[i] || looksFinite(pw[i])) {
+      continue; // unchanged, or the changed word already looks finite (a real slip)
+    }
+    for (let j = i - 1; j >= 0; j--) {
+      if (CLAUSE_BREAK_RE.test(pw[j])) {
+        break; // clause boundary — anything before it doesn't govern word i
+      }
+      // A perception verb governs word i — unless a determiner precedes it, which makes
+      // it a NOUN ("the watch glow…" is a real slip); then keep walking ("he felt the
+      // watch tick" still finds the true governor further back).
+      if (pw[j] === fw[j] && PERCEPTION_VERB_RE.test(pw[j]) && !(j > 0 && DETERMINER_RE.test(pw[j - 1]))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** Removes DOUBLE-quoted spans (dialogue) so a sentence can be judged on its NARRATION
  *  alone. Characters speak in any tense, so a "slip" that lives entirely inside quotation
  *  marks is not a narration error — the book's past tense does not bind dialogue. Only
@@ -140,8 +230,8 @@ export function phraseInDialogue(text: string, phrase: string): boolean {
  *  only expands a contraction / re-punctuates (she'd → she had) compares EQUAL under
  *  tenseSig, reasons about contractions / formality / wording aren't slips, and a change
  *  confined to DIALOGUE (the narration outside the quotes is unchanged) is exempt because
- *  speech isn't bound to the book's narrative tense. */
-const tenseAccept: ProofreadPass['accept'] = ({ phrase, fix, reason }) => {
+ *  speech isn't bound to the book's narrative tense. Exported for tests. */
+export const tenseAccept: ProofreadPass['accept'] = ({ phrase, fix, reason }) => {
   const sp = tenseSig(phrase);
   const sf = tenseSig(fix);
   return (
@@ -154,7 +244,11 @@ const tenseAccept: ProofreadPass['accept'] = ({ phrase, fix, reason }) => {
     sp.split(' ').length === sf.split(' ').length &&
     // Reject "corrections" of -ing participles/gerunds (paving→paved) — they're
     // non-finite and correct in past-tense narration, the #1 tense false positive.
-    !convertsParticiple(phrase, fix)
+    !convertsParticiple(phrase, fix) &&
+    // Reject "corrections" of a bare infinitive governed by a perception/causative
+    // verb ("felt the pressure build" → "built") — the finite perception verb already
+    // carries the tense; its bare-verb complement is non-finite and correct as-is.
+    !bareInfinitiveComplement(phrase, fix)
   );
 };
 

@@ -67,6 +67,36 @@ export function chunkBody(body: string): string[] {
   return chunks.slice(0, MAX_CHUNKS);
 }
 
+/** Anchored full-match for a "suggestion" that is a NO-OP sentinel instead of a rewrite
+ *  — "(No change needed)", "keep as is", "N/A", "unchanged", … The model sometimes emits
+ *  an issue entry and then declines to change it; without this filter the sentinel is
+ *  rendered as a one-click "fix" button in the hover card. Full-match anchoring means a
+ *  real rewrite that merely CONTAINS these words ("No one changed the locks.") never trips. */
+const NOOP_FIX_RE =
+  /^[\s("'“‘]*(?:no (?:change|edit|correction|revision|fix)e?s?(?: (?:is|are))?(?: (?:needed|necessary|required))?|none(?: (?:needed|necessary|required))?|n\/?a|unchanged|nothing to (?:change|fix|correct)|(?:keep|leave)(?: (?:it|this|the sentence))? (?:as[- ](?:is|written)|unchanged|the original)|(?:the )?(?:original|sentence)(?: is)? (?:fine|correct)(?: as[- ](?:is|written))?|(?:fine|correct|ok|okay) as[- ](?:is|written))[\s.!)"'”’]*$/i;
+
+/** True when the model's "suggestion" is a no-op sentinel rather than a rewrite. */
+export function noopSuggestion(fix: string): boolean {
+  return NOOP_FIX_RE.test(fix);
+}
+
+/** True when the model's "reason" says the sentence is ALREADY correct ("…which is fine
+ *  as written") — the model talked itself out of its own finding. Whatever the pass, a
+ *  reason declaring nothing wrong is not a diagnostic and must never surface. */
+const NOOP_REASON_RE =
+  /\b(?:is (?:already )?(?:fine|correct)|fine|correct|works|reads (?:fine|well)) as[- ](?:is|written)\b|\bno (?:change|correction|edit|fix)e?s? (?:is |are )?(?:needed|necessary|required)\b|\balready correct\b|\bnothing to (?:change|fix|correct)\b|\bshould (?:stay|remain) (?:as[- ](?:is|written)|unchanged)\b/i;
+
+/** A CONTRASTIVE reason ("the first clause is already correct, BUT 'walk' should be
+ *  'walked'") uses no-op wording about one part of the sentence while flagging another
+ *  — that is a real finding, not a retraction. */
+const CONTRAST_RE = /\b(?:but|however|except|beyond|aside|though|although|only|whereas)\b/i;
+
+/** True when the model's "reason" declares the sentence fine as written — and does NOT
+ *  go on to flag something anyway (a contrastive reason keeps its finding). */
+export function noopReason(reason: string): boolean {
+  return NOOP_REASON_RE.test(reason) && !CONTRAST_RE.test(reason);
+}
+
 /** Pulls the outermost `{ "issues": [...] }` object from model output and applies
  *  the pass's `accept` guard. Returns the kept findings, or `null` when the output
  *  had no parseable JSON object at all — the caller keeps the prior underlines
@@ -97,6 +127,12 @@ function parseFindings(text: string, pass: ProofreadPass): ProofreadFinding[] | 
       continue;
     }
     const reason = typeof r.reason === 'string' ? r.reason.trim() : '';
+    // The model sometimes emits an entry and then declines to change it — a no-op
+    // sentinel suggestion ("(No change needed)") or a reason that says the sentence
+    // is fine as written. Either way it is not a finding.
+    if (noopSuggestion(fix) || noopReason(reason)) {
+      continue;
+    }
     if (!pass.accept({ phrase, fix, reason })) {
       continue;
     }

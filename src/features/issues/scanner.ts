@@ -5,6 +5,7 @@ import { SecretStore } from '../ai/secretStore';
 import { createFeatureEngine, prepareFeatureEngine } from '../ai/engineFactory';
 import { activeMarkdownDoc, manuscriptFolder, gatherChapterFiles } from '../manuscript/compile';
 import { PASSIVE_RE } from '../spellcheck/passiveRegex';
+import { noopReason, noopSuggestion } from '../spellcheck/proofreadPass';
 import { stripFrontmatter } from '../../util/markdownScan';
 
 export type IssueType = 'passive' | 'tense' | 'continuity';
@@ -191,6 +192,17 @@ async function scanOne(
     if (!type || !sentence.trim()) {
       continue;
     }
+    const reason = typeof r.reason === 'string' ? r.reason.trim() : '';
+    let suggestion = typeof r.suggestion === 'string' ? r.suggestion.trim() : '';
+    // The model sometimes flags a sentence and then declines to change it — a no-op
+    // sentinel suggestion ("(No change needed)"), the sentence repeated verbatim, or a
+    // reason that says it's fine as written. That is a "nothing wrong" answer, not an issue.
+    if (noopReason(reason)) {
+      continue;
+    }
+    if (noopSuggestion(suggestion) || suggestion === sentence.trim()) {
+      suggestion = '';
+    }
     const { offset, length } = locate(target.text, sentence);
     issues.push({
       id: issueId(file, type, sentence),
@@ -200,8 +212,8 @@ async function scanOne(
       offset,
       length,
       sentence: sentence.trim(),
-      suggestion: typeof r.suggestion === 'string' ? r.suggestion.trim() : '',
-      reason: typeof r.reason === 'string' ? r.reason.trim() : ''
+      suggestion,
+      reason
     });
   }
   return { detectedTense, issues };
@@ -354,6 +366,16 @@ async function runCheckOne(
     if (!sentence.trim()) {
       continue;
     }
+    const reason = typeof r.reason === 'string' ? r.reason.trim() : '';
+    let suggestion = typeof r.suggestion === 'string' ? r.suggestion.trim() : '';
+    // Same no-op screening as scanOne. Continuity keeps the issue (a contradiction can
+    // be reported without a rewrite) but never shows a sentinel as its suggestion.
+    if (kind !== 'continuity' && noopReason(reason)) {
+      continue;
+    }
+    if (noopSuggestion(suggestion) || suggestion === sentence.trim()) {
+      suggestion = '';
+    }
     const { offset, length } = locate(target.text, sentence);
     issues.push({
       id: issueId(file, kind, sentence),
@@ -363,8 +385,8 @@ async function runCheckOne(
       offset,
       length,
       sentence: sentence.trim(),
-      suggestion: typeof r.suggestion === 'string' ? r.suggestion.trim() : '',
-      reason: typeof r.reason === 'string' ? r.reason.trim() : ''
+      suggestion,
+      reason
     });
   }
   return { detectedTense: kind === 'tense' ? detectedTense : null, issues };
