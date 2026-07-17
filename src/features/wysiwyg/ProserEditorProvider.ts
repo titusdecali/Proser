@@ -25,7 +25,8 @@ import { onModelState, currentModelState } from '../ai/modelState';
 import { currentModelName } from '../ai/aiModelStatus';
 import { aiSpellSuggestions } from '../spellcheck/aiSpell';
 import { AiDocSpellChecker } from '../spellcheck/aiDocSpell';
-import { harperGrammar, GrammarIssue } from '../spellcheck/harperGrammar';
+import { harperGrammar } from '../spellcheck/harperGrammar';
+import { EnrichedIssue, GrammarVerifier, enrichIssues } from '../spellcheck/grammarVerify';
 import { proofreadTense, TenseFinding } from '../spellcheck/aiTense';
 import { proofreadPassive, PassiveFinding } from '../spellcheck/aiPassive';
 import { readTenseOverride, stripProserMeta } from '../../util/proserMeta';
@@ -216,6 +217,10 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
   /** Whole-document AI spell corrections, paragraph-cached across all open docs. */
   private readonly aiDocSpell = new AiDocSpellChecker();
 
+  /** Sticky per-doc AI verdicts on Harper's judgment-call findings — the
+   *  context-aware second opinion that filters rule-engine false alarms. */
+  private readonly grammarVerifier = new GrammarVerifier();
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly spell: SpellService
@@ -280,8 +285,20 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     // them. Guarded so a real typo can never land here (see AiDocSpellChecker).
     let lastAiCleared = new Set<string>();
     // Grammar / word-choice errors from the Harper pass (different-color
-    // underline). Same lifecycle as the AI spelling aggregate above.
-    let lastGrammar: GrammarIssue[] = [];
+    // underline), enriched with kind + sentence context. Judgment-call findings
+    // are screened through the AI verdict cache (GrammarVerifier) before display;
+    // mechanical ones surface immediately. Same lifecycle as the AI spelling
+    // aggregate above.
+    let lastGrammarEnriched: EnrichedIssue[] = [];
+    // Whether the verify layer is active for the current pass (sub-toggle on AND
+    // a capable local model resolved). False → all findings display unverified.
+    let grammarVerifying = false;
+    // Last spellResult payload actually sent, serialized. Ten separate triggers
+    // funnel into postSpell (dictionary debounce, Harper, the AI stream, config
+    // events, …) and the webview repaints wholesale on every message — so identical
+    // consecutive results used to tear down and rebuild the squiggles anyway, one
+    // visible flash per trigger ("waves"). Skip the send when nothing changed.
+    let lastSpellPayload = '';
     const postSpell = async () => {
       const words = this.spell.enabled()
         ? await this.spell.misspellings(stripProserMeta(document.getText()))
@@ -308,15 +325,22 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       const grammarOn = vscode.workspace
         .getConfiguration(EXTENSION_ID)
         .get<boolean>(ConfigKeys.checksGrammar, true);
-      void panel.webview.postMessage({
-        type: 'spellResult',
-        words: merged,
-        // Grammar is an independent toggle (its own `checks.grammar`), so it can stay
-        // on with spelling off and vice-versa.
-        grammar: grammarOn
-          ? lastGrammar.filter((g) => !this.spell.isGrammarIgnored(g.phrase))
-          : []
-      });
+      // Grammar is an independent toggle (its own `checks.grammar`), so it can stay
+      // on with spelling off and vice-versa. Judgment-call findings pass through the
+      // AI verdict cache; the wire shape is stripped to {phrase,message,fix} so span
+      // churn from unrelated edits can't defeat the payload dedupe below.
+      const { display } = this.grammarVerifier.partition(docKey, lastGrammarEnriched, grammarVerifying);
+      const grammar = grammarOn
+        ? display
+            .filter((g) => !this.spell.isGrammarIgnored(g.phrase))
+            .map((g) => ({ phrase: g.phrase, message: g.message, fix: g.fix }))
+        : [];
+      const payload = JSON.stringify({ words: merged, grammar });
+      if (payload === lastSpellPayload) {
+        return; // identical to what the webview already shows — don't repaint
+      }
+      lastSpellPayload = payload;
+      void panel.webview.postMessage({ type: 'spellResult', words: merged, grammar });
     };
     const scheduleSpell = () => {
       if (spellTimer) {
@@ -349,7 +373,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       if (!this.spell.enabled()) {
         lastAiSuggestions = new Map();
         lastAiCleared = new Set();
-        // NOTE: do NOT touch lastGrammar — grammar is Harper's (independent of the
+        // NOTE: do NOT touch lastGrammarEnriched — grammar is Harper's (independent of the
         // AI spell model/toggle). Clearing it here made grammar vanish when spelling
         // was turned off, then reappear on the next Harper pass.
         return;
@@ -364,7 +388,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       if (!(await proofreadFits())) {
         lastAiSuggestions = new Map();
         lastAiCleared = new Set();
-        // (Harper grammar needs no AI model — leave lastGrammar alone.)
+        // (Harper grammar needs no AI model — leave lastGrammarEnriched alone.)
         if (!proofreadMemWarned) {
           proofreadMemWarned = true;
           void vscode.window.showWarningMessage(
@@ -416,15 +440,47 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     // Fast and offline, so it runs on a short debounce. Loads lazily; if Harper can't
     // load in the packaged host it returns nothing and grammar simply stays quiet.
     let harperTimer: NodeJS.Timeout | undefined;
+    let grammarCtl: AbortController | undefined;
     const runHarperGrammar = async () => {
-      const grammarOn = vscode.workspace
-        .getConfiguration(EXTENSION_ID)
-        .get<boolean>(ConfigKeys.checksGrammar, true);
-      if (!grammarOn) {
+      const cfg = vscode.workspace.getConfiguration(EXTENSION_ID);
+      if (!cfg.get<boolean>(ConfigKeys.checksGrammar, true)) {
         return; // postSpell already hides grammar when off — skip the lint work
       }
-      lastGrammar = await harperGrammar(stripProserMeta(document.getText()));
-      void postSpell();
+      const text = stripProserMeta(document.getText());
+      lastGrammarEnriched = enrichIssues(text, await harperGrammar(text));
+      // The AI second opinion runs only with the sub-toggle on AND a capable local
+      // model; otherwise every finding displays unverified (pre-verify behavior).
+      const tag = resolveLocalModel();
+      grammarVerifying = cfg.get<boolean>(ConfigKeys.checksGrammarAiVerify, true) && clearCapable(tag);
+      const { pending } = this.grammarVerifier.partition(docKey, lastGrammarEnriched, grammarVerifying);
+      void postSpell(); // mechanical + already-verdicted findings show NOW
+      if (!grammarVerifying || pending.length === 0) {
+        return;
+      }
+      // Serialized on the shared chain so the single local model never runs the
+      // verify call concurrently with the tense/passive passes.
+      enqueueCheck(async () => {
+        if (!grammarEnabled()) {
+          return; // master toggle flipped while queued
+        }
+        const helper = await getCheckEngine();
+        if (!helper || !(await helper.isReady()).ready) {
+          return; // no model right now — findings stay held, retried next pass
+        }
+        if (!(await proofreadFits())) {
+          return; // no memory headroom beside the editor model
+        }
+        grammarCtl?.abort();
+        grammarCtl = new AbortController();
+        signalAi(tag, true);
+        try {
+          if (await this.grammarVerifier.verifyPending(docKey, pending, helper, grammarCtl.signal)) {
+            void postSpell(); // verdicts landed — surface kept findings
+          }
+        } finally {
+          signalAi(tag, false);
+        }
+      });
     };
     const scheduleHarperGrammar = () => {
       if (harperTimer) {
@@ -462,13 +518,24 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     // the webview already hides any findings, so there's nothing to display anyway.
     const grammarEnabled = () =>
       vscode.workspace.getConfiguration(EXTENSION_ID).get<boolean>(ConfigKeys.checksGrammar, true);
+    // Same no-op guard as postSpell: skip the send (and the webview's wholesale
+    // repaint) when the findings are identical to what it already shows.
+    let lastTensePayload = '';
+    const postTense = (findings: TenseFinding[]): void => {
+      const payload = JSON.stringify(findings);
+      if (payload === lastTensePayload) {
+        return;
+      }
+      lastTensePayload = payload;
+      void panel.webview.postMessage({ type: 'tenseResult', findings });
+    };
     const runAiTense = async () => {
       if (!grammarEnabled()) {
         return; // suggestions off — skip the model; keep findings so they return on re-enable
       }
       if (!tenseEnabled()) {
         lastTenseText = '';
-        void panel.webview.postMessage({ type: 'tenseResult', findings: [] as TenseFinding[] });
+        postTense([]);
         return;
       }
       const text = document.getText();
@@ -505,7 +572,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
           return; // unparseable/empty model output — keep prior underlines, retry next edit
         }
         lastTenseText = text;
-        void panel.webview.postMessage({ type: 'tenseResult', findings });
+        postTense(findings);
       } catch {
         /* aborted or model error — keep the prior squiggles until the next pass */
       } finally {
@@ -531,13 +598,23 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
     let lastPassiveText = '';
     const passiveEnabled = () =>
       vscode.workspace.getConfiguration(EXTENSION_ID).get<boolean>(ConfigKeys.checksPassiveVoice, true);
+    // Same no-op guard as postSpell/postTense.
+    let lastPassivePayload = '';
+    const postPassive = (findings: PassiveFinding[]): void => {
+      const payload = JSON.stringify(findings);
+      if (payload === lastPassivePayload) {
+        return;
+      }
+      lastPassivePayload = payload;
+      void panel.webview.postMessage({ type: 'passiveResult', findings });
+    };
     const runAiPassive = async () => {
       if (!grammarEnabled()) {
         return; // suggestions off — skip the model (master Grammar toggle)
       }
       if (!passiveEnabled()) {
         lastPassiveText = '';
-        void panel.webview.postMessage({ type: 'passiveResult', findings: [] as PassiveFinding[] });
+        postPassive([]);
         return;
       }
       const text = stripProserMeta(document.getText());
@@ -567,7 +644,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
           return; // unparseable/empty model output — keep prior underlines, retry next edit
         }
         lastPassiveText = text;
-        void panel.webview.postMessage({ type: 'passiveResult', findings });
+        postPassive(findings);
       } catch {
         /* aborted or model error — keep the prior squiggles until the next pass */
       } finally {
@@ -585,10 +662,14 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Re-push spelling when the dictionary or the enabled toggle changes; a
     // language switch invalidates the AI cache, so re-run the doc pass too.
+    // The AI's verdicts are KEPT (keepCleared + the lastAi* maps stay): a
+    // dictionary edit doesn't change the model's judgment of OTHER words, and
+    // zeroing them here re-squiggled every AI-cleared word for the seconds the
+    // re-scan needed — one of the mark→clear→mark wave sources. postSpell always
+    // starts from the CURRENT dictionary result, so a just-added word stops being
+    // flagged regardless, and stale suggestions for unflagged words are inert.
     const spellSub = this.spell.onDidChange(() => {
-      this.aiDocSpell.dispose(docKey);
-      lastAiSuggestions = new Map();
-      lastAiCleared = new Set();
+      this.aiDocSpell.dispose(docKey, { keepCleared: true });
       // Grammar is Harper's — a dictionary/toggle change doesn't invalidate it.
       void postSpell();
       scheduleAiSpell();
@@ -603,6 +684,9 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.aiEngine}`)
       ) {
         this.aiDocSpell.dispose(docKey);
+        // Grammar verdicts are the MODEL'S judgment of Harper output — they die
+        // with the model choice. (Dictionary changes don't touch them.)
+        this.grammarVerifier.dispose(docKey);
         lastAiSuggestions = new Map();
         lastAiCleared = new Set();
         // Harper grammar is model-independent — don't clear it on an AI model change.
@@ -746,7 +830,12 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
           // The webview has rendered the document and it's visible. NOW it's safe to
           // run the checks. Dictionary spell is instant; the AI proofread still only
           // runs incrementally as you edit (cached per paragraph), and tense is one
-          // throttled whole-doc pass.
+          // throttled whole-doc pass. A (re)displayed webview starts blank, so drop
+          // the no-op payload caches — it must receive the results again even when
+          // they're identical to the last send.
+          lastSpellPayload = '';
+          lastTensePayload = '';
+          lastPassivePayload = '';
           void postSpell();
           scheduleHarperGrammar();
           scheduleAiTense();
@@ -1047,7 +1136,9 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       aiCtl?.abort();
       tenseCtl?.abort();
       passiveCtl?.abort();
+      grammarCtl?.abort();
       this.aiDocSpell.dispose(docKey);
+      this.grammarVerifier.dispose(docKey);
     });
   }
 }

@@ -179,6 +179,19 @@ export function getEditorHtml(webview: vscode.Webview, extensionUri: vscode.Uri)
     /* Hide Toast's WYSIWYG code-block language widget (the floating "js ✎"). */
     .toastui-editor-ww-code-block-language { display: none !important; }
 
+    /* Ordered-list numbers: Toast UI draws them as a CSS counter inside a FIXED
+       24px ::before box (with an RTL bidi trick to render "10."), sized for its
+       13px default font. At Proser's 18-28px editor font a two-digit marker no
+       longer fits the box — "10." lost its period and digits overlapped ("19"
+       read as "29"). Use the browser's native list numbering instead: it sizes
+       to content, scales with the font, right-aligns at the period, and honors
+       <ol start> when a split list resumes at 10. The padding is em-based so
+       the indent grows with the font. Task-list items are excluded — they keep
+       Toast's checkbox ::before. */
+    .toastui-editor-contents ol { list-style-type: decimal; padding-left: 2em; }
+    .toastui-editor-contents ol > li:not(.task-list-item)::before { content: none; }
+    .toastui-editor-contents ol > li::marker { color: var(--vscode-descriptionForeground); }
+
     /* Markdown mode = raw source. Toast styles its source pane in the same
        proportional font as the rendered view, so on a plain-prose file the two
        modes look identical. Force the source editor to the VS Code monospace

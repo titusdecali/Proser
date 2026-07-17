@@ -14,7 +14,7 @@ import {
   VIEW_TYPE_MARKDOWN_EDITOR
 } from '../../constants';
 import { getNonce } from '../../util/nonce';
-import { presizeSidePanel, recordSidePanel } from '../../util/editorLayout';
+import { lockPanelGroup, presizeSidePanel, recordSidePanel } from '../../util/editorLayout';
 import { PROSER_THEME_VARS } from '../../util/webviewTheme';
 import { SecretStore } from '../ai/secretStore';
 import { currentModelName } from '../ai/aiModelStatus';
@@ -217,10 +217,12 @@ export class ManuscriptSidebar implements vscode.WebviewViewProvider {
       }
     });
     this.panel = panel;
-    // Lock this editor group so files opened from the Explorer / Quick Open land
-    // in another (unlocked) group instead of on top of Proser — even when Proser
-    // is the focused group. The new panel is the active group right now.
-    void vscode.commands.executeCommand('workbench.action.lockEditorGroup');
+    // Lock the PANEL'S group so files opened from the Explorer / Quick Open land
+    // in another (unlocked) group instead of on top of Proser — verified against
+    // the active tab first, because blindly locking "the active group" sometimes
+    // locked the user's TEXT group (focus hadn't switched yet), which then bounced
+    // every file-open into a new split.
+    lockPanelGroup('proser.manuscriptPanel');
     return panel;
   }
 

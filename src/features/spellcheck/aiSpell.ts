@@ -44,7 +44,7 @@ export async function aiSpellSuggestions(
     ],
     () => {},
     signal,
-    { format: SPELL_SCHEMA, numCtx: AI_CONTEXT_TOKENS, think: false, numPredict: 512, temperature: 0.2 }
+    { format: SPELL_SCHEMA, numCtx: AI_CONTEXT_TOKENS, think: false, numPredict: 512, temperature: 0.2, seed: 7 }
   );
 
   return cleanCorrections(text, word).slice(0, max);
@@ -126,7 +126,10 @@ export async function proofreadParagraph(
       ],
       () => {},
       signal,
-      { format: PROOFREAD_SCHEMA, numCtx: AI_CONTEXT_TOKENS, think: false, numPredict: 768, temperature: 0.2 }
+      // temperature 0 + fixed seed: the typo-vs-intentional VERDICT must be
+      // deterministic — at 0.2 with no seed the same paragraph could flip between
+      // "cleared" and "flagged" across re-runs, flickering squiggles on unchanged text.
+      { format: PROOFREAD_SCHEMA, numCtx: AI_CONTEXT_TOKENS, think: false, numPredict: 768, temperature: 0, seed: 7 }
     );
     return parseProofread(text, flaggedWords);
   } catch {

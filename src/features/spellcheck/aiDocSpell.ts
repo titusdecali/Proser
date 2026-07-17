@@ -47,10 +47,25 @@ const CONCURRENCY = 1;
 export class AiDocSpellChecker {
   private readonly cache = new Map<string, Map<string, ParaResult>>();
   private readonly gen = new Map<string, number>();
+  /** Per-doc words the model has EVER judged intentional this session. A clearance
+   *  is a verdict about the WORD (a name, a coined term, a sound), not about one
+   *  paragraph revision — so it survives paragraph edits. Without this, editing a
+   *  paragraph resets it to the empty placeholder in `update()` and the immediate
+   *  aggregate DROPS its cleared words: every previously-cleared word re-squiggles
+   *  for the seconds the model needs to re-confirm, then clears again — the visible
+   *  mark→clear→mark wave. A sticky clearance is still overridden the moment any
+   *  paragraph produces a correction for that word (typo-wins rule in `update`). */
+  private readonly everCleared = new Map<string, Set<string>>();
 
-  dispose(docKey: string): void {
+  dispose(docKey: string, opts?: { keepCleared?: boolean }): void {
     this.cache.delete(docKey);
     this.gen.delete(docKey);
+    // `keepCleared` preserves the intentional-word verdicts across cache resets
+    // that don't change the model's judgment (e.g. a dictionary edit). A model /
+    // engine change or closing the editor drops them.
+    if (!opts?.keepCleared) {
+      this.everCleared.delete(docKey);
+    }
   }
 
   async update(
@@ -70,6 +85,25 @@ export class AiDocSpellChecker {
     const next = new Map<string, ParaResult>();
     const todo: Array<{ hash: string; text: string }> = [];
 
+    // Every emitted aggregate is widened with the doc's sticky clearances, so a
+    // paragraph that is momentarily an unchecked placeholder can't un-clear the
+    // words it had cleared before. Corrections still win: a word the CURRENT
+    // aggregate has a genuine correction for is never suppressed.
+    const sticky = this.everCleared.get(docKey) ?? new Set<string>();
+    this.everCleared.set(docKey, sticky);
+    const emit = (): void => {
+      const agg = aggregate(next);
+      for (const w of agg.cleared) {
+        sticky.add(w);
+      }
+      for (const w of sticky) {
+        if (!agg.suggestions.has(w)) {
+          agg.cleared.add(w);
+        }
+      }
+      onUpdate(agg);
+    };
+
     for (const para of splitParagraphs(text)) {
       const h = hash(para);
       if (next.has(h)) {
@@ -86,7 +120,7 @@ export class AiDocSpellChecker {
       }
     }
     this.cache.set(docKey, next);
-    onUpdate(aggregate(next));
+    emit();
 
     if (todo.length === 0) {
       return;
@@ -101,7 +135,7 @@ export class AiDocSpellChecker {
           return;
         }
         next.set(item.hash, result);
-        onUpdate(aggregate(next));
+        emit();
       }
     };
 

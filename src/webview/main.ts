@@ -32,6 +32,9 @@ let proserMeta = '';
 let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 let currentMode: 'pretty' | 'markdown' = 'pretty';
+/** macOS webview — decides which modifier the format shortcuts advertise/claim. */
+const IS_MAC = /Mac/i.test(navigator.platform);
+
 let fontSize = 18;
 let maxWidth = '80ch';
 let exportFilename = 'document.pdf';
@@ -693,8 +696,8 @@ function ensureMenu(): HTMLElement {
     bookSvg +
     '</button>' +
     '<button data-fmt="bold" title="Bold (Ctrl+B)"><b>B</b></button>' +
-    '<button data-fmt="italic" title="Italic (Ctrl+I)"><i>I</i></button>' +
-    '<button data-fmt="underline" title="Underline (Ctrl+U)"><u>U</u></button>' +
+    `<button data-fmt="italic" title="Italic (${IS_MAC ? '⌘I' : 'Ctrl+I'})"><i>I</i></button>` +
+    `<button data-fmt="underline" title="Underline (${IS_MAC ? '⌘U' : 'Ctrl+U'})"><u>U</u></button>` +
     '<button data-fmt="strike" title="Strikethrough"><s>S</s></button>' +
     '</div>' +
     '<div class="act-group">' +
@@ -913,15 +916,35 @@ function applyInsertBelow(text: string): void {
 
 /** Positions a popup card just below the word/passage (or above if it'd overflow). */
 function positionCard(card: HTMLElement, rect: DOMRect | null): void {
+  // Clear any cap from a previous positioning so we measure the NATURAL height —
+  // cards grow after they open (More options, dictionary group) and re-anchor.
+  card.style.maxHeight = '';
+  card.style.overflowY = '';
   if (!rect) {
     card.style.left = '40px';
     card.style.top = '60px';
     return;
   }
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - card.offsetWidth - 8));
-  let top = rect.bottom + 6;
-  if (top + card.offsetHeight > window.innerHeight - 8) {
-    top = Math.max(8, rect.top - card.offsetHeight - 6);
+  const margin = 8; // breathing room from the viewport edges
+  const gap = 6; // distance from the anchor rect
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - card.offsetWidth - margin));
+  const height = card.offsetHeight;
+  const spaceBelow = window.innerHeight - margin - (rect.bottom + gap);
+  const spaceAbove = rect.top - gap - margin;
+  let top: number;
+  if (height <= spaceBelow) {
+    top = rect.bottom + gap; // fits below the anchor — the default placement
+  } else if (height <= spaceAbove) {
+    top = rect.top - gap - height; // doesn't fit below — flip above
+  } else {
+    // Taller than EITHER side (long synonym lists near the screen edge): take the
+    // roomier side and cap the card's height so it scrolls inside instead of
+    // running off-screen and hiding options.
+    const below = spaceBelow >= spaceAbove;
+    const capped = Math.max(60, below ? spaceBelow : spaceAbove);
+    card.style.maxHeight = capped + 'px';
+    card.style.overflowY = 'auto';
+    top = below ? rect.bottom + gap : margin;
   }
   card.style.left = left + 'px';
   card.style.top = top + 'px';
@@ -1896,28 +1919,42 @@ document.addEventListener(
   true
 );
 
-// Formatting shortcuts — Ctrl-based on every platform so Cmd+B stays VS Code's
-// sidebar toggle on macOS. Ctrl+B/I/U → bold/italic/underline. Capture phase +
-// stopPropagation so Toast's own Mod-b/Mod-i don't ALSO fire (double-toggle) and
-// VS Code doesn't grab the keys.
+// Formatting shortcuts — Ctrl+B/I/U on every platform, PLUS Cmd+I/U on macOS.
+// Cmd+B stays excluded so it remains VS Code's sidebar toggle. Cmd+I/U MUST be
+// claimed here: unhandled they either reach Toast's own keymap (Mod-u makes a
+// BULLET LIST, not underline) or — when the editable isn't focused — leak to VS
+// Code's keybinding layer, which edits the underlying .md document (the "Cmd+I
+// added a numbered list" bug). Capture phase + stopPropagation so neither Toast
+// nor VS Code ever double-handles a claimed key.
 document.addEventListener(
   'keydown',
   (e) => {
     if (currentMode !== 'pretty' || !editor) {
       return;
     }
-    if (!e.ctrlKey || e.metaKey || e.altKey) {
-      return; // Ctrl only
+    const ctrl = e.ctrlKey && !e.metaKey && !e.altKey;
+    const cmd = IS_MAC && e.metaKey && !e.ctrlKey && !e.altKey; // macOS Cmd only
+    if (!ctrl && !cmd) {
+      return;
     }
+    // Ctrl works only from inside the editor (the Find / Revise inputs keep their
+    // keys). Cmd+I/U is ALSO accepted when the target is <body> — that is exactly
+    // where the keydown lands when the editable lost focus, the case that used to
+    // leak the keystroke out of the webview.
     const wrap = $('editor');
-    if (wrap && !wrap.contains(e.target as Node)) {
-      return; // only while editing the Pretty content (not the Find / Revise inputs)
+    const inEditor = !!wrap && wrap.contains(e.target as Node);
+    if (!inEditor && !(cmd && e.target === document.body)) {
+      return;
     }
     let handled = true;
     switch (e.key) {
       case 'b':
       case 'B':
-        applyFormat('bold');
+        if (ctrl) {
+          applyFormat('bold');
+        } else {
+          handled = false; // Cmd+B → VS Code sidebar toggle, untouched
+        }
         break;
       case 'i':
       case 'I':

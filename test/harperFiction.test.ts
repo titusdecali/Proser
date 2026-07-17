@@ -32,7 +32,9 @@ const SUPPRESSED = [
   // MassNouns: fiction nominalizes freely — "a burning" is intentional
   'Alix felt a burning on her back as she walked to the shed.',
   // MissingTo: mis-parsed the participial adjective "intended" as a verb needing "to"
-  'Whatever their intended use, they floated Gary over the pit.'
+  'Whatever their intended use, they floated Gary over the pit.',
+  // PossessiveYour: pushed the subject "you two" to "your two"
+  "If you two don't hurry, you'll regret it."
 ];
 
 // Must STILL be caught after the opt-outs (guards against over-suppression).

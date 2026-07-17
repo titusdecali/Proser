@@ -89,6 +89,9 @@ export const ConfigKeys = {
   /** Live grammar / word-choice underline in the editor (Harper, local/offline).
    *  Lets the user silence the blue squiggles without turning off AI spell-clearing. */
   checksGrammar: 'checks.grammar',
+  /** AI review of judgment-call Harper findings in sentence context before they
+   *  underline (filters false alarms). Self-disables without a capable model. */
+  checksGrammarAiVerify: 'checks.grammarAiVerify',
   qualityLintEnabled: 'qualityLint.enabled',
   wordcountStatusBarEnabled: 'wordcount.statusBarEnabled',
   wordcountIncludeCodeBlocks: 'wordcount.includeCodeBlocks',

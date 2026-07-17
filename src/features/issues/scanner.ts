@@ -171,7 +171,7 @@ async function runChat(
  *  JSON and disable the local thinking model's chain-of-thought — gemma4 otherwise
  *  reasons into a separate field and returns empty `content`, so the scan finds
  *  nothing. `numCtx` stops Ollama from silently truncating to its ~2k default. */
-const CHECK_OPTS: ChatOpts = { format: 'json', think: false, temperature: 0.2, numCtx: AI_CONTEXT_TOKENS };
+const CHECK_OPTS: ChatOpts = { format: 'json', think: false, temperature: 0, seed: 7, numCtx: AI_CONTEXT_TOKENS };
 
 /** AI scan of one file → its issues + the model's detected tense. */
 async function scanOne(

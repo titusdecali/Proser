@@ -162,7 +162,9 @@ async function proofreadChunk(
       out += t;
     },
     signal,
-    { format: 'json', think: false, temperature: 0.2, numCtx: AI_CONTEXT_TOKENS }
+    // temperature 0 + fixed seed: identical prose must yield identical findings,
+    // or the tense/passive underlines flip on unchanged text between re-runs.
+    { format: 'json', think: false, temperature: 0, seed: 7, numCtx: AI_CONTEXT_TOKENS }
   );
   return parseFindings(out, pass);
 }

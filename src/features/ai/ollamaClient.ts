@@ -161,6 +161,12 @@ export class OllamaClient implements AiClient {
     if (opts?.temperature !== undefined) {
       options.temperature = opts.temperature;
     }
+    if (opts?.seed !== undefined) {
+      // Fixed seed → identical input gives identical output. The verdict passes
+      // (spell clear/flag, tense, passive) rely on this so squiggles don't flip
+      // on unchanged text between re-runs.
+      options.seed = opts.seed;
+    }
     if (Object.keys(options).length) {
       body.options = options;
     }

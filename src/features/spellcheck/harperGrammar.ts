@@ -21,6 +21,11 @@ export interface GrammarIssue {
   message: string;
   /** The corrected replacement for `phrase`. */
   fix: string;
+  /** Harper lint kind (e.g. 'WordChoice') — drives the AI-verify/immediate split. */
+  kind?: string;
+  /** Span of the flagged text in the linted string — for sentence extraction. */
+  start?: number;
+  end?: number;
 }
 
 interface HarperSpan {
@@ -61,7 +66,8 @@ const FICTION_RULE_CONFIG: Record<string, boolean> = {
   AvoidCurses: false, // profanity is in scope for fiction; not the editor's business
   PronounContraction: false, // pushes ordinary past-tense "were" to "we're" ("they were reading" → "they we're")
   MassNouns: false, // fiction nominalizes freely — "a burning on her back", "a knowing" are intentional
-  MissingTo: false // mis-parses participial adjectives as verbs ("their intended use" → wants "intended to")
+  MissingTo: false, // mis-parses participial adjectives as verbs ("their intended use" → wants "intended to")
+  PossessiveYour: false // "you two don't hurry" → "your two"; misses real "you car" errors in full sentences anyway
 };
 
 /** Lint kinds we do NOT surface as grammar underlines. Spelling is owned by the
@@ -238,7 +244,14 @@ export function mapHarperLints(text: string, lints: HarperLint[]): GrammarIssue[
       continue;
     }
     seen.add(key);
-    out.push({ phrase, message: lint.message(), fix });
+    out.push({
+      phrase,
+      message: lint.message(),
+      fix,
+      kind: lint.lint_kind(),
+      start: span.start,
+      end: span.end
+    });
   }
   return out;
 }

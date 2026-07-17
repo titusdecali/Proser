@@ -8,7 +8,7 @@ import { OllamaClient } from './ollamaClient';
 import { currentModelName } from './aiModelStatus';
 import { signalAi } from './aiActivity';
 import { getBrainstormHtml } from './brainstormHtml';
-import { presizeSidePanel, recordSidePanel } from '../../util/editorLayout';
+import { lockPanelGroup, presizeSidePanel, recordSidePanel } from '../../util/editorLayout';
 import { titleFromFilename } from '../manuscript/compile';
 import { getStoryContext } from '../storyMemory/engine';
 
@@ -564,8 +564,11 @@ export function registerBrainstorm(context: vscode.ExtensionContext): void {
       panel = undefined;
     });
 
-    // Lock this group so files opened from the Explorer land in another group
-    // rather than next to Brainstorm, even when it's focused.
-    void vscode.commands.executeCommand('workbench.action.lockEditorGroup');
+    // Lock the PANEL'S group so files opened from the Explorer land in another
+    // group rather than next to Brainstorm — verified against the active tab
+    // first, because blindly locking "the active group" sometimes locked the
+    // user's TEXT group (focus hadn't switched yet), which then bounced every
+    // file-open into a new split.
+    lockPanelGroup(VIEW_TYPE);
   }
 }

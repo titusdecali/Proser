@@ -79,3 +79,35 @@ export async function recordSidePanel(
     applyLayout(total, targetPx);
   }
 }
+
+/**
+ * Locks the editor group holding a just-created side panel, so files opened from
+ * the Explorer / Quick Open land in another (unlocked) group instead of on top
+ * of the panel.
+ *
+ * `workbench.action.lockEditorGroup` only acts on the ACTIVE group, and right
+ * after `createWebviewPanel` the focus switch has not always landed — firing the
+ * command blindly sometimes locked the USER'S text group instead. A locked text
+ * group persists in the workspace and bounces EVERY subsequent file-open into a
+ * brand-new split. So: lock only after verifying the active tab really is this
+ * panel (matched by webview viewType); retry briefly while focus settles, and
+ * otherwise skip — an unlocked panel is a minor nuisance, a wrongly locked text
+ * group breaks opening files everywhere.
+ */
+export function lockPanelGroup(viewType: string): void {
+  const panelIsActive = (): boolean => {
+    const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+    return (
+      !!tab && tab.input instanceof vscode.TabInputWebview && tab.input.viewType.includes(viewType)
+    );
+  };
+  let attempts = 0;
+  const tryLock = (): void => {
+    if (panelIsActive()) {
+      void vscode.commands.executeCommand('workbench.action.lockEditorGroup');
+    } else if (++attempts < 5) {
+      setTimeout(tryLock, 60); // focus not settled yet — check again shortly
+    }
+  };
+  tryLock();
+}

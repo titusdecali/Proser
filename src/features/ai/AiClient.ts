@@ -41,6 +41,12 @@ export interface ChatOpts {
    *  too high for deterministic extraction/spell, which should pin this low (~0.2)
    *  for fidelity + consistency. Undefined = leave the model's default. */
   temperature?: number;
+  /** Fixed sampling seed (Ollama `seed`). The verdict-style passes (spell clear/
+   *  flag, tense, passive) re-run over identical text all session — without a
+   *  seed even temperature 0.2 lets the verdict FLIP between runs, which the user
+   *  sees as squiggles appearing and disappearing on unchanged prose. Set for
+   *  those passes; leave undefined for creative calls. (No-op for OpenRouter.) */
+  seed?: number;
 }
 
 export interface AiClient {

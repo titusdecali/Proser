@@ -2,7 +2,7 @@
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
   "description": "Creative writing with local AI editor",
-  "version": "1.4.43",
+  "version": "1.4.48",
   "publisher": "titusdecali",
   "license": "MIT",
   "author": {
@@ -448,6 +448,11 @@
           "type": "boolean",
           "default": true,
           "description": "Underline grammar / word-choice errors live in the editor (blue, AI proofread). Turn this off to silence the blue squiggles while keeping AI spell-checking on."
+        },
+        "proser.checks.grammarAiVerify": {
+          "type": "boolean",
+          "default": true,
+          "description": "When a capable local AI model is running, review grammar findings in sentence context before underlining them, filtering false alarms. Judgment-call findings wait a few seconds for review; mechanical findings (repeated words, capitalization, punctuation) always show immediately. With no model available, all findings show unreviewed."
         },
         "proser.spellcheck.language": {
           "type": "string",
