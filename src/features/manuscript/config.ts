@@ -4,10 +4,12 @@
 import * as vscode from 'vscode';
 import { ManuscriptMeta } from './model';
 
-const META_FILE = '.proser-manuscript.json';
+/** Exported so the manuscript-folder resolver can use this file as a marker:
+ *  it always lives next to the chapters (see compile.ts manuscriptFolder). */
+export const MANUSCRIPT_META_FILE = '.proser-manuscript.json';
 
 export function metaUri(folder: vscode.Uri): vscode.Uri {
-  return vscode.Uri.joinPath(folder, META_FILE);
+  return vscode.Uri.joinPath(folder, MANUSCRIPT_META_FILE);
 }
 
 export async function readMeta(folder: vscode.Uri): Promise<ManuscriptMeta | undefined> {

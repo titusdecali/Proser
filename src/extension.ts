@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { registerStatusBarWordCount } from './features/wordcountStatus/statusBarWordCount';
 import { registerExplorerWordCount } from './features/wordcountExplorer/explorerCount';
+import { registerDailyGoal } from './features/dailyGoal/dailyGoal';
 import { registerThesaurus } from './features/thesaurus/thesaurusCommands';
 import { registerSpellCheck } from './features/spellcheck/spellChecker';
 import { SpellService } from './features/spellcheck/spellService';
@@ -28,6 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   registerStatusBarWordCount(context); // M1
   registerExplorerWordCount(context); // M2
+  registerDailyGoal(context); // M13 (words written today + daily target, bottom-right)
   registerThesaurus(context); // M3
   registerSpellCheck(context, spell); // M4 (Add to dictionary command)
   registerQualityLint(context); // M4

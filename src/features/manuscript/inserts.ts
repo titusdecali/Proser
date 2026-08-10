@@ -126,7 +126,7 @@ export async function insertSceneBreak(): Promise<void> {
 
 /** Opens the title-page form (create or edit the folder's manuscript metadata). */
 export async function editTitlePage(): Promise<void> {
-  const folder = manuscriptFolder();
+  const folder = await manuscriptFolder();
   if (!folder) {
     void vscode.window.showWarningMessage('Open a manuscript file or folder first.');
     return;

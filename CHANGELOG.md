@@ -2,6 +2,25 @@
 
 All notable changes to Proser are documented here.
 
+## [1.4.54]
+
+### Fixed
+- **The Pretty editor no longer rewrites Markdown you did not edit** (issue #1).
+  The editor holds the document as a tree and re-serialized the whole file after
+  every edit, so a one-sentence change also restyled the rest of it: `-` bullets
+  became `*`, heading punctuation was escaped (`## 1\. Title`), hand-wrapped
+  paragraphs collapsed into one long line, `<br>` appeared inside list items, and
+  the blank line under the YAML frontmatter disappeared. A small prose edit
+  produced a large Git diff.
+
+  Proser now writes back your own source for every block you did not change, and
+  only the block you edited carries editor output — pulled toward the file's own
+  bullet marker and without the added escapes and `<br>`. Markdown mode also shows
+  the file's real source instead of the editor's re-serialization of it.
+
+  Set `proser.wysiwyg.preserveSourceFormatting` to `false` to go back to always
+  writing the editor's own formatting.
+
 ## [1.4.39]
 
 ### Fixed

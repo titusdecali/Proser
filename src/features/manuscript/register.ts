@@ -37,7 +37,7 @@ async function exportManuscript(kind: 'docx' | 'pdf', scope: Scope): Promise<voi
     folder = vscode.Uri.joinPath(doc.uri, '..');
     uris = [doc.uri];
   } else {
-    folder = manuscriptFolder();
+    folder = await manuscriptFolder();
     if (!folder) {
       void vscode.window.showWarningMessage('Open a manuscript file or folder first.');
       return;

@@ -67,7 +67,8 @@ const FICTION_RULE_CONFIG: Record<string, boolean> = {
   PronounContraction: false, // pushes ordinary past-tense "were" to "we're" ("they were reading" → "they we're")
   MassNouns: false, // fiction nominalizes freely — "a burning on her back", "a knowing" are intentional
   MissingTo: false, // mis-parses participial adjectives as verbs ("their intended use" → wants "intended to")
-  PossessiveYour: false // "you two don't hurry" → "your two"; misses real "you car" errors in full sentences anyway
+  PossessiveYour: false, // "you two don't hurry" → "your two"; misses real "you car" errors in full sentences anyway
+  TheirToThere: false // flags correct possessive "to their right" (special-cases "right"; "to their left" passes); the only real catch lost is the rare "we drove their" pattern
 };
 
 /** Lint kinds we do NOT surface as grammar underlines. Spelling is owned by the

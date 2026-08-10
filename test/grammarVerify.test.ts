@@ -66,11 +66,39 @@ const ISSUE = {
 const MECH = { phrase: 'the the', message: 'repeated', fix: 'the', kind: 'Repetition', start: 0, end: 7 };
 
 describe('grammarVerify — context extraction and keys', () => {
-  it('extracts the containing sentence and a ±1-sentence window', () => {
+  it('extracts the containing sentence and a ±2-sentence window', () => {
     const sc = sentenceContext(DOC, START, START + 6);
     assert.ok(sc.sentence.includes("If you two don't hurry"));
     const win = DOC.slice(sc.contextStart, sc.contextEnd);
     assert.ok(win.includes('stepped aside') && win.includes('A pause'), win);
+  });
+
+  it('the window reaches two sentences each way but never leaves the paragraph', () => {
+    const para =
+      'First came the wind. Second came the rain. Third their surfaces shone. ' +
+      'Fourth the light returned. Fifth the city slept.\n\nAnother paragraph entirely.';
+    const at = para.indexOf('their');
+    const sc = sentenceContext(para, at, at + 5);
+    const win = para.slice(sc.contextStart, sc.contextEnd);
+    assert.ok(win.includes('First came') && win.includes('Fifth the city slept'), win);
+    assert.ok(!win.includes('Another paragraph'), win);
+  });
+
+  it('computes which occurrence of the phrase a finding points at', () => {
+    const doc = 'The wall ran to their right. Later the wall ran to their right again.';
+    const first = doc.indexOf('to their right');
+    const second = doc.indexOf('to their right', first + 1);
+    const mk = (start: number) => ({
+      phrase: 'to their right',
+      message: 'm',
+      fix: 'to there right',
+      kind: 'WordChoice',
+      start,
+      end: start + 'to their right'.length
+    });
+    const [e1, e2] = enrichIssues(doc, [mk(first), mk(second)]);
+    assert.strictEqual(e1.occurrence, 0);
+    assert.strictEqual(e2.occurrence, 1);
   });
 
   it('splits mechanical from judgment-prone kinds and marks the span', () => {

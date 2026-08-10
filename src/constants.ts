@@ -45,7 +45,9 @@ export const Commands = {
   manuscriptDivider: 'proser.manuscript.divider',
   editorChecks: 'proser.editor.checks',
   revealInPretty: 'proser.revealInPretty',
-  insertInPretty: 'proser.insertInPretty'
+  insertInPretty: 'proser.insertInPretty',
+  dailyGoalSetTarget: 'proser.dailyGoal.setTarget',
+  dailyGoalMenu: 'proser.dailyGoal.menu'
 } as const;
 
 /** Webview view id for the "Issues" panel (passive voice / tense scanner). */
@@ -93,11 +95,19 @@ export const ConfigKeys = {
    *  underline (filters false alarms). Self-disables without a capable model. */
   checksGrammarAiVerify: 'checks.grammarAiVerify',
   qualityLintEnabled: 'qualityLint.enabled',
+  /** Bottom-right "words written today" counter across the whole manuscript. */
+  dailyGoalEnabled: 'dailyGoal.enabled',
+  /** Daily word target for that counter; 0 = track words without a target. */
+  dailyGoalTarget: 'dailyGoal.target',
   wordcountStatusBarEnabled: 'wordcount.statusBarEnabled',
   wordcountIncludeCodeBlocks: 'wordcount.includeCodeBlocks',
   wordcountIncludeFrontmatter: 'wordcount.includeFrontmatter',
   wordcountWordsPerMinute: 'wordcount.wordsPerMinute',
   wysiwygSyncDebounceMs: 'wysiwyg.syncDebounceMs',
+  /** Write back the file's OWN Markdown source for every block the Pretty editor
+   *  did not change, instead of Toast UI's re-serialization of the whole document
+   *  (which restyles bullets, escapes heading punctuation and re-wraps prose). */
+  wysiwygPreserveSource: 'wysiwyg.preserveSourceFormatting',
   wysiwygFontSize: 'wysiwyg.fontSize',
   wysiwygMaxWidth: 'wysiwyg.maxWidth',
   aiEngine: 'ai.engine',
@@ -148,6 +158,15 @@ export const STATE_SPELL_IGNORED = 'proser.spell.ignored';
 /** workspaceState key for grammar/word-choice findings the user has chosen to
  *  ignore (keyed by the flagged phrase) — they never resurface in this workspace. */
 export const STATE_GRAMMAR_IGNORED = 'proser.grammar.ignored';
+
+/** workspaceState key: the start-of-day word-count baseline for the daily goal
+ *  ({ date: 'YYYY-MM-DD', total }). Today's words = current manuscript total −
+ *  this baseline, so the count survives reloads and resets at local midnight. */
+export const STATE_DAILY_GOAL_BASELINE = 'proser.dailyGoal.baseline';
+
+/** workspaceState key: the local date ('YYYY-MM-DD') the daily-target celebration
+ *  card was last shown, so it appears at most once per day. */
+export const STATE_DAILY_GOAL_CELEBRATED = 'proser.dailyGoal.celebrated';
 
 /** The `markdown` language id, used to scope every feature to Markdown. */
 export const MARKDOWN_LANGUAGE_ID = 'markdown';

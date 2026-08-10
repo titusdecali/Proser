@@ -73,7 +73,7 @@ async function gatherTargets(scope: ScanScope): Promise<Target[]> {
     const doc = activeMarkdownDoc();
     return doc ? [{ uri: doc.uri, text: doc.getText() }] : [];
   }
-  const folder = manuscriptFolder();
+  const folder = await manuscriptFolder();
   if (!folder) {
     return [];
   }

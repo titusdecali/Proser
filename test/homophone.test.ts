@@ -41,7 +41,14 @@ const PRECISION = [
   'We were fascinated by the old machine.',
   'She waved goodbye over his head and was gone.',
   'Their plan, whatever it was, had failed.',
-  "You're not the person I thought you were."
+  "You're not the person I thought you were.",
+  // Directional possessive "their" — Harper's TheirToThere rule wrongly flagged
+  // "to their right" (it special-cases "right"); the rule is now disabled in
+  // FICTION_RULE_CONFIG. Curly apostrophes match real manuscript text.
+  'The city’s wall ran to their right.',
+  'The path curved to their right as they walked.',
+  'She looked to their left and saw the tower.',
+  'He only understood them as buildings when he realized they weren’t actually moving, but that their surfaces were.'
 ];
 
 // Real errors Harper catches (each yields ≥1 finding). "I want to go too the store"
@@ -61,7 +68,9 @@ const KNOWN_MISSES = [
   'Your welcome to stay.',
   "They're car is bright red.",
   'There going home early.',
-  'I have to many problems.'
+  'I have to many problems.',
+  // Lost by disabling TheirToThere (the rule that false-alarmed on "to their right"):
+  'We drove their in silence.'
 ];
 
 describe('Harper grammar — homophone precision/recall', function () {

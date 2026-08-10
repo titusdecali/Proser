@@ -2,7 +2,7 @@
   "name": "proser",
   "displayName": "Proser — Make VSCode the ultimate writing app",
   "description": "Creative writing with local AI editor",
-  "version": "1.4.48",
+  "version": "1.4.54",
   "publisher": "titusdecali",
   "license": "MIT",
   "author": {
@@ -233,6 +233,18 @@
         "title": "Manuscript: Export PDF (Standard Manuscript Format)",
         "category": "Proser",
         "icon": "$(file-pdf)"
+      },
+      {
+        "command": "proser.dailyGoal.setTarget",
+        "title": "Word Goal: Set Daily Target…",
+        "category": "Proser",
+        "icon": "$(target)"
+      },
+      {
+        "command": "proser.dailyGoal.menu",
+        "title": "Word Goal: Progress & Target",
+        "category": "Proser",
+        "icon": "$(flame)"
       }
     ],
     "viewsContainers": {
@@ -504,10 +516,26 @@
           "default": 200,
           "description": "Reading speed used to estimate reading time."
         },
+        "proser.dailyGoal.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show today's words written across the whole manuscript in the status bar (bottom right)."
+        },
+        "proser.dailyGoal.target": {
+          "type": "number",
+          "default": 500,
+          "minimum": 0,
+          "markdownDescription": "Daily word target counted across ALL manuscript files (not just the open one). `0` tracks today's words without a target. Quickest way to change it: click the daily counter in the status bar."
+        },
         "proser.wysiwyg.syncDebounceMs": {
           "type": "number",
           "default": 200,
           "description": "Delay before syncing external file changes into the pretty editor, in milliseconds."
+        },
+        "proser.wysiwyg.preserveSourceFormatting": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Keep your own Markdown source for every block you did not edit. The pretty editor re-writes the whole document in its own style (`*` bullets, escaped punctuation in headings such as `## 1\\. Title`, paragraphs re-joined into one long line, `<br>` inside list items), which turns a one-sentence edit into a large Git diff. With this on, only the block you actually changed is re-written. Turn it off to always write the editor's own formatting."
         },
         "proser.wysiwyg.fontSize": {
           "type": "number",

@@ -50,7 +50,7 @@ class ChaptersProvider implements vscode.TreeDataProvider<ChapterItem> {
         const scope = await getStoryScope();
         files = scope ? await listStoryFiles(scope.root) : [];
       } else {
-        const folder = manuscriptFolder();
+        const folder = await manuscriptFolder();
         files = folder ? await gatherChapterFiles(folder) : [];
       }
       return files.map((u) => new ChapterItem(u, u.toString() === activeKey));

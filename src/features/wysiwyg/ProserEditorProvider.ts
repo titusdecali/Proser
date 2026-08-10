@@ -127,6 +127,7 @@ interface FromWebview {
     | 'selectModel'
     | 'thesaurusEngine'
     | 'showIssues'
+    | 'wordGoalMenu'
     | 'openBrainstorm'
     | 'exportMenu'
     | 'exportPdf'
@@ -327,13 +328,14 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
         .get<boolean>(ConfigKeys.checksGrammar, true);
       // Grammar is an independent toggle (its own `checks.grammar`), so it can stay
       // on with spelling off and vice-versa. Judgment-call findings pass through the
-      // AI verdict cache; the wire shape is stripped to {phrase,message,fix} so span
-      // churn from unrelated edits can't defeat the payload dedupe below.
+      // AI verdict cache; the wire shape carries no raw spans so span churn from
+      // unrelated edits can't defeat the payload dedupe below — `occurrence` (which
+      // instance of the phrase to underline) only changes when the anchor truly moves.
       const { display } = this.grammarVerifier.partition(docKey, lastGrammarEnriched, grammarVerifying);
       const grammar = grammarOn
         ? display
             .filter((g) => !this.spell.isGrammarIgnored(g.phrase))
-            .map((g) => ({ phrase: g.phrase, message: g.message, fix: g.fix }))
+            .map((g) => ({ phrase: g.phrase, message: g.message, fix: g.fix, occurrence: g.occurrence }))
         : [];
       const payload = JSON.stringify({ words: merged, grammar });
       if (payload === lastSpellPayload) {
@@ -703,6 +705,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       const wsCfg = vscode.workspace.getConfiguration(EXTENSION_ID);
       const fontSize = wsCfg.get<number>(ConfigKeys.wysiwygFontSize, 18);
       const maxWidth = wsCfg.get<string>(ConfigKeys.wysiwygMaxWidth, '80ch');
+      const preserveSourceFormatting = wsCfg.get<boolean>(ConfigKeys.wysiwygPreserveSource, true);
       const spellcheckEnabled = wsCfg.get<boolean>(ConfigKeys.spellcheckEnabled, true);
       const grammarEnabled = wsCfg.get<boolean>(ConfigKeys.checksGrammar, true);
       // Sentence spacing: 'none' | '1' | '2' → expected space count for the underline.
@@ -718,6 +721,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
         type: 'config',
         fontSize,
         maxWidth,
+        preserveSourceFormatting,
         spellcheckEnabled,
         grammarEnabled,
         sentenceSpacing,
@@ -911,6 +915,10 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
           // Open the Proser sidebar on the Editor (tense/passive/continuity) tab.
           await vscode.commands.executeCommand(Commands.editorChecks);
           break;
+        case 'wordGoalMenu':
+          // Same quick menu as clicking the bottom-right daily counter.
+          await vscode.commands.executeCommand(Commands.dailyGoalMenu);
+          break;
         case 'openBrainstorm':
           try {
             await vscode.commands.executeCommand(Commands.brainstorm);
@@ -1067,6 +1075,7 @@ export class ProserEditorProvider implements vscode.CustomTextEditorProvider {
       if (
         e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.wysiwygMaxWidth}`) ||
         e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.wysiwygFontSize}`) ||
+        e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.wysiwygPreserveSource}`) ||
         e.affectsConfiguration(`${EXTENSION_ID}.spellcheck`) ||
         e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.spacingAfterPeriod}`) ||
         e.affectsConfiguration(`${EXTENSION_ID}.${ConfigKeys.quotesPunctuationStyle}`) ||

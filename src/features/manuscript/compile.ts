@@ -4,6 +4,10 @@
 import * as vscode from 'vscode';
 import { EXTENSION_ID, MARKDOWN_LANGUAGE_ID, VIEW_TYPE_MARKDOWN_EDITOR } from '../../constants';
 import { BookModel, Chapter, ManuscriptMeta, countWords, parseChapter } from './model';
+import { MANUSCRIPT_META_FILE } from './config';
+// NOTE: scope.ts also imports helpers from this module. The cycle is safe — both
+// sides only call the other's hoisted functions at runtime, never at module load.
+import { getStoryScope, hasConfiguredRoot } from '../storyMemory/scope';
 
 /** Default basenames (without extension) treated as non-manuscript reference. */
 const DEFAULT_EXCLUDE = [
@@ -48,12 +52,53 @@ export function activeMarkdownDoc(): vscode.TextDocument | undefined {
   return undefined;
 }
 
-/** The folder whose chapters we compile: the active file's directory, else the
- *  first workspace folder. */
-export function manuscriptFolder(): vscode.Uri | undefined {
+/** Last successfully-resolved manuscript folder — keeps every consumer stable
+ *  when the author closes ALL editor tabs (the active-doc chain goes dark). */
+let lastManuscriptFolder: vscode.Uri | undefined;
+
+/**
+ * The folder whose chapters we compile. Must never depend on an editor being
+ * open — closing the last tab used to blank the Chapters view and point exports
+ * at the workspace root. Resolution chain:
+ *   1. the active Markdown file's directory (remembered for later),
+ *   2. the remembered folder from earlier this session (validated: still inside
+ *      the workspace and still on disk),
+ *   3. the persisted Story Root (`.proser/config.json`), when configured,
+ *   4. the folder holding a `.proser-manuscript.json` marker — the title-page
+ *      metadata always lives next to the chapters,
+ *   5. the first workspace folder (the original fallback).
+ */
+export async function manuscriptFolder(): Promise<vscode.Uri | undefined> {
   const doc = activeMarkdownDoc();
   if (doc && doc.uri.scheme === 'file') {
-    return vscode.Uri.joinPath(doc.uri, '..');
+    lastManuscriptFolder = vscode.Uri.joinPath(doc.uri, '..');
+    return lastManuscriptFolder;
+  }
+  if (lastManuscriptFolder && vscode.workspace.getWorkspaceFolder(lastManuscriptFolder)) {
+    try {
+      await vscode.workspace.fs.stat(lastManuscriptFolder);
+      return lastManuscriptFolder;
+    } catch {
+      lastManuscriptFolder = undefined; // deleted/renamed — fall through
+    }
+  }
+  if (await hasConfiguredRoot()) {
+    const root = (await getStoryScope())?.root;
+    if (root) {
+      return root;
+    }
+  }
+  try {
+    const markers = await vscode.workspace.findFiles(`**/${MANUSCRIPT_META_FILE}`, '**/node_modules/**', 2);
+    if (markers.length > 0) {
+      // Deterministic pick when a workspace holds several manuscripts; authors
+      // with more than one should set a Story Root, which wins above.
+      markers.sort((a, b) => a.path.localeCompare(b.path, 'en'));
+      lastManuscriptFolder = vscode.Uri.joinPath(markers[0], '..');
+      return lastManuscriptFolder;
+    }
+  } catch {
+    /* search unavailable — fall through */
   }
   return vscode.workspace.workspaceFolders?.[0]?.uri;
 }

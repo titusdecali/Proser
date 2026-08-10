@@ -5,6 +5,7 @@ import { jsPDF } from 'jspdf';
 import { onHostMessage } from './messaging';
 import { HostToWebviewType } from './protocol';
 import { splitHead, blockifyComments } from './proseText';
+import { preserveMarkdownSource } from '../util/markdownSource';
 import { readTenseOverride, formatTenseComment, TenseOverride } from '../util/proserMeta';
 import { history as pmHistory, undo as pmUndo, redo as pmRedo, closeHistory as pmCloseHistory } from 'prosemirror-history';
 
@@ -41,10 +42,33 @@ let exportFilename = 'document.pdf';
 
 const $ = (id: string) => document.getElementById(id);
 
+/** The body exactly as the document (file) holds it right now — the baseline the
+ *  source-preserving merge restores untouched blocks from. */
+let sourceBody = '';
+/** `wysiwyg.preserveSourceFormatting` — keep the original Markdown source of
+ *  blocks the user did not edit, instead of Toast UI's re-serialization. */
+let preserveSource = true;
+
+/** The edited body. In Pretty mode Toast UI re-serializes the WHOLE document on
+ *  every keystroke in its own house style, so the result is merged back over the
+ *  file's own source and only changed blocks keep serializer output. Markdown
+ *  mode edits the source directly and is passed through untouched. */
+function currentBody(): string {
+  const body = editor ? editor.getMarkdown() : '';
+  return preserveSource && currentMode === 'pretty' ? preserveMarkdownSource(sourceBody, body) : body;
+}
+
 /** The full markdown the document should hold = preserved head (frontmatter +
  *  Proser metadata comment) + the edited body. */
 function currentMarkdown(): string {
-  return frontmatter + proserMeta + (editor ? editor.getMarkdown() : '');
+  return frontmatter + proserMeta + currentBody();
+}
+
+/** {@link currentMarkdown}, and adopt it as the new baseline — for callers that
+ *  are about to make the document hold exactly this text. */
+function commitMarkdown(): string {
+  sourceBody = currentBody();
+  return frontmatter + proserMeta + sourceBody;
 }
 
 // ---- Word-like undo/redo -------------------------------------------------
@@ -183,12 +207,24 @@ function setMode(mode: 'pretty' | 'markdown'): void {
       ? before.scrollTop / (before.scrollHeight - before.clientHeight)
       : 0;
 
+  // Markdown mode edits raw source, so it must show the file's OWN source — Toast
+  // UI would hand it a re-serialization instead, and that is what would then be
+  // written back. Computed before the mode flips, so the merge still runs.
+  const sourceForMarkdown = mode === 'markdown' && preserveSource && editor ? currentBody() : '';
+
   currentMode = mode;
   userTyping = false; // a mode switch is never a user edit
   syncModeButtons();
   withSuppressed(() => {
     if (mode === 'markdown') {
       changeMode('markdown'); // raw Markdown source editing
+      if (sourceForMarkdown && sourceForMarkdown !== editor.getMarkdown()) {
+        try {
+          editor.setMarkdown(sourceForMarkdown, false);
+        } catch {
+          /* keep Toast's own text rather than blank the editor */
+        }
+      }
       if (typeof editor?.changePreviewStyle === 'function') {
         editor.changePreviewStyle('tab'); // source-focused, no split preview
       }
@@ -1229,6 +1265,7 @@ function initEditor(fullText: string): void {
   frontmatter = head.frontmatter;
   proserMeta = head.proserMeta;
   const body = head.body;
+  sourceBody = body; // baseline for the source-preserving merge
   updateTenseButton();
   const opts = {
     el: $('editor'),
@@ -1502,7 +1539,7 @@ function initEditor(fullText: string): void {
       clearTimeout(debounceTimer);
     }
     debounceTimer = setTimeout(() => {
-      const md = currentMarkdown();
+      const md = commitMarkdown();
       if (md === lastSent) {
         return;
       }
@@ -1550,6 +1587,7 @@ onHostMessage<HostToWebviewType>({
       applyingRemote = true;
       frontmatter = fm;
       proserMeta = pm;
+      sourceBody = body; // the file changed under us — re-baseline the merge
       updateTenseButton();
       try {
         editor.setMarkdown(blockifyComments(body), false);
@@ -1697,6 +1735,9 @@ onHostMessage<HostToWebviewType>({
     }
     if (typeof msg.maxWidth === 'string') {
       applyMaxWidth(msg.maxWidth);
+    }
+    if (typeof msg.preserveSourceFormatting === 'boolean') {
+      preserveSource = msg.preserveSourceFormatting;
     }
     if (typeof msg.spellcheckEnabled === 'boolean') {
       applySpellcheck(msg.spellcheckEnabled);
@@ -1913,7 +1954,7 @@ document.addEventListener(
     if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S') && !e.altKey) {
       e.preventDefault();
       e.stopPropagation();
-      vscode.postMessage({ type: 'save', text: currentMarkdown() });
+      vscode.postMessage({ type: 'save', text: commitMarkdown() });
     }
   },
   true
@@ -2111,38 +2152,62 @@ function scheduleRepaintSpell(): void {
 
 // ---- Inline grammar squiggles (Harper grammar; a SECOND highlight color) ----
 // Same CSS-Highlight approach as spelling, but a distinct color. Each finding is a
-// {phrase, message, fix}; we underline its first occurrence and offer the fix on
-// right-click. Detection comes from the host's Harper grammar pass (debounced/cached).
+// {phrase, message, fix, occurrence}; we underline the occurrence-th instance of the
+// phrase (0-based, counted in the host's linted text) so a correct repeat of the same
+// words elsewhere can't steal the underline. Detection comes from the host's Harper
+// grammar pass (debounced/cached).
 interface GrammarFinding {
   phrase: string;
   message: string;
   fix: string;
+  /** 0-based index of the intended instance among identical phrase matches. */
+  occurrence?: number;
 }
 let grammarFindings: GrammarFinding[] = [];
 let grammarRanges: Array<{ finding: GrammarFinding; range: Range }> = [];
 
-/** First-occurrence range for each grammar finding's phrase in the visible text
- *  (single text node — covers the common case without crossing inline formatting). */
+/** Range for each grammar finding's phrase in the visible text, targeting the
+ *  finding's `occurrence` (nth non-overlapping match, counted across text nodes;
+ *  each match within a single node — covers the common case without crossing inline
+ *  formatting). If the visible text has fewer instances than expected — rendering
+ *  differs from the linted source — the last match found is kept rather than
+ *  dropping the underline. */
 function collectGrammarRanges(): Array<{ finding: GrammarFinding; range: Range }> {
   const root = editorContentEl();
   const out: Array<{ finding: GrammarFinding; range: Range }> = [];
   if (!root || grammarFindings.length === 0) {
     return out;
   }
-  const remaining = new Set(grammarFindings.filter((g) => g.phrase));
+  const targets = grammarFindings
+    .filter((g) => g.phrase)
+    .map((finding) => ({ finding, want: Math.max(0, finding.occurrence ?? 0), seen: 0, best: null as Range | null }));
+  let unresolved = targets.length;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let node: Node | null;
-  while (remaining.size && (node = walker.nextNode())) {
+  while (unresolved && (node = walker.nextNode())) {
     const text = node.nodeValue || '';
-    for (const finding of Array.from(remaining)) {
-      const idx = text.indexOf(finding.phrase);
-      if (idx >= 0) {
+    for (const t of targets) {
+      if (t.seen > t.want) {
+        continue; // already matched its target occurrence
+      }
+      let idx = text.indexOf(t.finding.phrase);
+      while (idx >= 0 && t.seen <= t.want) {
         const range = document.createRange();
         range.setStart(node, idx);
-        range.setEnd(node, idx + finding.phrase.length);
-        out.push({ finding, range });
-        remaining.delete(finding);
+        range.setEnd(node, idx + t.finding.phrase.length);
+        t.best = range; // latest match so far — fallback if we run out early
+        t.seen++;
+        if (t.seen > t.want) {
+          unresolved--;
+          break;
+        }
+        idx = text.indexOf(t.finding.phrase, idx + t.finding.phrase.length);
       }
+    }
+  }
+  for (const t of targets) {
+    if (t.best) {
+      out.push({ finding: t.finding, range: t.best });
     }
   }
   return out;
@@ -2892,7 +2957,7 @@ function setTenseOverride(tense: TenseOverride | null): void {
   updateTenseButton();
   hideTenseMenu();
   userTyping = true; // a genuine document change — let it sync to the file
-  const md = currentMarkdown();
+  const md = commitMarkdown();
   lastSent = md;
   vscode.postMessage({ type: 'edit', text: md });
 }
@@ -2954,6 +3019,7 @@ $('tenseBtn')?.addEventListener('click', () => {
 });
 $('fontMinus')?.addEventListener('click', () => changeFont(-1));
 $('fontPlus')?.addEventListener('click', () => changeFont(1));
+$('wordGoalBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'wordGoalMenu' }));
 $('issuesBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'showIssues' }));
 $('brainstormBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'openBrainstorm' }));
 $('exportBtn')?.addEventListener('click', () => vscode.postMessage({ type: 'exportMenu' }));
