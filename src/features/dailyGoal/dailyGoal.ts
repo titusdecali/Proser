@@ -15,7 +15,9 @@ import { gatherChapterFiles, manuscriptFolder } from '../manuscript/compile';
 import { showCelebrationCard } from './celebrationPanel';
 
 /** Start-of-day snapshot of the whole-manuscript word count. Today's words
- *  written = current total − baseline.total (net: deletions subtract). */
+ *  written = current total − baseline.total (net: deletions subtract).
+ *  The snapshot also moves during the day to cancel out word changes the
+ *  writer did not type — a paste, a bulk edit, a duplicated or renamed file. */
 interface DayBaseline {
   date: string; // local 'YYYY-MM-DD'
   total: number;
@@ -24,6 +26,10 @@ interface DayBaseline {
 const DEFAULT_TARGET = 500;
 const EDIT_DEBOUNCE_MS = 500;
 const RESCAN_DEBOUNCE_MS = 2000;
+/** Characters in one edit above which the edit is a paste or a bulk change, not
+ *  typing. A keystroke changes 1–2 characters, and the Pretty editor sends at
+ *  most a few characters per 300 ms sync, so real typing stays far below this. */
+const BULK_EDIT_CHARS = 24;
 /** How often to re-check the calendar date so the counter rolls over to 0 at
  *  midnight even when no edits happen. */
 const DAY_TICK_MS = 60_000;
@@ -66,6 +72,8 @@ export function registerDailyGoal(context: vscode.ExtensionContext): void {
   /** Story-root path from the last scan, to filter save events cheaply. */
   let lastRootPath: string | undefined;
   let scanGen = 0; // invalidates in-flight scans superseded by a newer one
+  /** Files (uri string) whose pending recount includes a paste or bulk edit. */
+  const bulkEdits = new Set<string>();
 
   function getTarget(): number {
     return vscode.workspace
@@ -125,9 +133,35 @@ export function registerDailyGoal(context: vscode.ExtensionContext): void {
     if (gen !== scanGen) {
       return;
     }
+    if (ready) {
+      // Files that appeared or disappeared (duplicate, rename, new chapter,
+      // deleted chapter) change the manuscript total without anyone typing.
+      let shift = 0;
+      for (const [key, n] of next) {
+        if (!counts.has(key)) {
+          shift += n;
+        }
+      }
+      for (const [key, n] of counts) {
+        if (!next.has(key)) {
+          shift -= n;
+        }
+      }
+      await adjustBaseline(shift);
+    }
     counts = next;
     ready = true;
     await afterCountsChanged();
+  }
+
+  /** Moves today's starting total by `words`, so a change the writer did not
+   *  type leaves the day's count where it was. */
+  async function adjustBaseline(words: number): Promise<void> {
+    if (words === 0 || !baseline || baseline.date !== todayKey()) {
+      return;
+    }
+    baseline = { date: baseline.date, total: baseline.total + words };
+    await context.workspaceState.update(STATE_DAILY_GOAL_BASELINE, baseline);
   }
 
   /** Re-baselines when the calendar date changed (first run, next morning, or
@@ -181,6 +215,8 @@ export function registerDailyGoal(context: vscode.ExtensionContext): void {
     if (written < 0) {
       md.appendMarkdown('\n_Negative = you deleted more than you wrote (net count)._\n');
     }
+    md.appendMarkdown('\n_Only words you type count. Pasted text, bulk edits and');
+    md.appendMarkdown(' duplicated or renamed files do not._\n');
     md.appendMarkdown('\n_Click to set your daily target._');
     return md;
   }
@@ -299,9 +335,26 @@ export function registerDailyGoal(context: vscode.ExtensionContext): void {
       if (!counts.has(key)) {
         return; // not a manuscript file (new files enter via create/save rescan)
       }
+      // A paste, a cut, or any other block-sized edit is not typing. Flag it now
+      // and cancel its word delta when the recount below runs.
+      if (
+        e.contentChanges.some(
+          (c) => c.text.length > BULK_EDIT_CHARS || c.rangeLength > BULK_EDIT_CHARS
+        )
+      ) {
+        bulkEdits.add(key);
+      }
       debouncer.schedule(key, () => {
-        counts.set(key, countMarkdownWords(doc.getText(), wordcountScanOptions()));
-        void afterCountsChanged();
+        const before = counts.get(key) ?? 0;
+        const after = countMarkdownWords(doc.getText(), wordcountScanOptions());
+        counts.set(key, after);
+        const bulk = bulkEdits.delete(key);
+        void (async () => {
+          if (bulk) {
+            await adjustBaseline(after - before);
+          }
+          await afterCountsChanged();
+        })();
       });
     }),
 

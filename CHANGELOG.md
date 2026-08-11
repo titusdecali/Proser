@@ -2,6 +2,28 @@
 
 All notable changes to Proser are documented here.
 
+## [1.4.56]
+
+### Added
+- **Pick a cloud model from a list instead of typing a slug.** After you enter an
+  OpenRouter API key, Proser now shows a short list of models chosen for writing —
+  a free Gemma 4, cheap options such as Qwen 3.7 Flash and Gemma 3 12B, Gemini 3.5
+  Flash Lite for everyday work, and Claude Sonnet 5 for the best prose — each with
+  its approximate price per million tokens. **Enter a model name…** still takes any
+  slug from openrouter.ai, and the globe button opens the full catalogue.
+
+## [1.4.55]
+
+### Fixed
+- **The daily word goal counts only the words you type.** It compared the whole
+  manuscript against a start-of-day total, so duplicating, renaming or deleting a
+  chapter moved the day's count by that chapter's whole word count, and pasting a
+  scene from elsewhere filled the goal without any writing.
+
+  Proser now cancels out every word change you did not type: a paste, a cut, any
+  other block-sized edit, and files that appear or disappear from the manuscript.
+  Typing and single-key deletions count as before.
+
 ## [1.4.54]
 
 ### Fixed
