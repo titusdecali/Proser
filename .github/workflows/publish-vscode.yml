@@ -1,0 +1,32 @@
+# Builds Proser and publishes it to Open VSX and the VS Code Marketplace.
+# Open VSX uses trusted publishing: no stored token, it trusts this file in titusdecali/Proser by name.
+# Runs on a tag like v1.4.57 or by hand from the Actions tab.
+name: Publish VS Code extension
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+      # One package for both stores; vscode:prepublish runs the production build.
+      - run: npx vsce package --out proser.vsix
+      # ovsx 1.2.0 is the first version with --trusted-publishing.
+      - run: npx --yes ovsx@1.2.0 publish --packagePath proser.vsix --trusted-publishing --skip-duplicate
+      # The VS Code Marketplace has no working trusted publishing yet, so it takes a token from the
+      # VSCE_PAT secret. Swap to `vsce publish --oidc` once the Marketplace accepts it.
+      - run: npx vsce publish --packagePath proser.vsix --skip-duplicate
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
